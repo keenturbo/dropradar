@@ -1,14 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func  # ✅ 导入 func
 from typing import List, Optional
 from datetime import datetime, timedelta
 import random
 
 from app.core.database import get_db
 from app.models.domain import Domain, DomainStatus
-from app.schemas.domain import DomainResponse, DomainListResponse, StatsResponse, ScanRequest, ScanResponse
-from app.services.scanner import DomainScanner
 from app.services.notification import notify_bark
 
 router = APIRouter()
@@ -30,7 +28,7 @@ def generate_mock_domain():
     tld = random.choice([".com", ".ai", ".io", ".net"])
     return name + tld
 
-@router.get("/domains", response_model=DomainListResponse)
+@router.get("/domains")
 def get_domains(
     skip: int = 0,
     limit: int = 100,
@@ -43,7 +41,6 @@ def get_domains(
     try:
         query = db.query(Domain)
         
-        # 应用过滤条件
         if min_da:
             query = query.filter(Domain.da_score >= min_da)
         if max_spam:
@@ -51,7 +48,6 @@ def get_domains(
         if status:
             query = query.filter(Domain.status == status)
         
-        # 按 DA 降序排列
         domains = query.order_by(Domain.da_score.desc()).offset(skip).limit(limit).all()
         total = query.count()
         
@@ -66,7 +62,7 @@ def get_domains(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/scan", response_model=ScanResponse)
+@router.post("/scan")
 def start_scan(
     bark_key: Optional[str] = None,
     db: Session = Depends(get_db)
@@ -75,24 +71,20 @@ def start_scan(
     try:
         print("🔍 Starting domain scan...")
         
-        # 生成 5-10 个模拟高价值域名
         num_domains = random.randint(5, 10)
         new_domains = []
         
         for _ in range(num_domains):
             domain_name = generate_mock_domain()
             
-            # 检查是否已存在
             existing = db.query(Domain).filter(Domain.name == domain_name).first()
             if existing:
                 continue
             
-            # 生成模拟 SEO 指标
             da_score = random.randint(25, 65)
             backlinks = random.randint(50, 500)
             spam_score = random.randint(0, 15)
             
-            # 创建域名记录
             domain = Domain(
                 name=domain_name,
                 da_score=da_score,
@@ -107,7 +99,6 @@ def start_scan(
             db.add(domain)
             new_domains.append(domain_name)
             
-            # 如果是高价值域名且提供了 Bark Key，发送通知
             if da_score > 40 and spam_score < 10 and bark_key:
                 try:
                     notify_bark(
@@ -135,13 +126,13 @@ def start_scan(
         raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
 
 
-@router.get("/stats", response_model=StatsResponse)
+@router.get("/stats")
 def get_stats(db: Session = Depends(get_db)):
     """获取统计数据"""
     try:
         total = db.query(Domain).count()
         
-        # 使用 sqlalchemy.func 计算平均值
+        # ✅ 修复：直接使用 func.avg()
         avg_da_result = db.query(func.avg(Domain.da_score)).scalar()
         avg_da = round(float(avg_da_result), 1) if avg_da_result else 0.0
         
