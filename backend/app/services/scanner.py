@@ -5,12 +5,11 @@ from typing import List, Dict
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import time
 
 # ========== 配置信息 ==========
 OPENPAGERANK_API_KEY = "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84"
+DOMAINSDB_API_KEY = "7f783667-ba54-4954-94fa-760d83765a85"  # 🆕 添加 DomainDB API Key
 EXPIREDDOMAINS_USERNAME = "turboexpireddomains"
 EXPIREDDOMAINS_PASSWORD = "zeBtu2-kigsij-teqmab"  # ⚠️ 需要你填写密码
 
@@ -25,7 +24,7 @@ def get_open_pagerank(domain: str) -> int:
         
         if data.get('status_code') == 200 and data.get('response'):
             page_rank = data['response'][0].get('page_rank_decimal', 0)
-            da_score = int(page_rank * 10)  # 转换为 0-100 的 DA 分数
+            da_score = int(page_rank * 10)
             print(f"✅ {domain} -> DA: {da_score}")
             return da_score
         else:
@@ -34,44 +33,65 @@ def get_open_pagerank(domain: str) -> int:
     except Exception as e:
         print(f"❌ OpenPageRank error for {domain}: {e}")
     
-    # 失败时返回随机值
     return random.randint(20, 50)
 
 
 def fetch_from_domainsdb(keywords: List[str] = None) -> List[Dict]:
-    """方案 1: 从 DomainDB 获取域名列表（免费，无需登录）"""
+    """方案 1: 从 DomainDB 获取域名列表（需要 API Key）"""
     if not keywords:
         keywords = ['ai', 'gpt', 'tech', 'crypto', 'web3', 'quantum', 'neural', 'meta', 'defi']
     
     all_domains = []
     
+    print(f"🔍 Querying DomainDB with {len(keywords)} keywords")
+    
+    # 🆕 添加 Authorization header
+    headers = {
+        'Authorization': f'Bearer {DOMAINSDB_API_KEY}'
+    }
+    
     for keyword in keywords:
         try:
-            url = f"https://api.domainsdb.info/v1/domains/search?domain={keyword}&zone=com"
-            response = requests.get(url, timeout=10)
-            data = response.json()
+            url = f"https://api.domainsdb.info/v1/domains/search?query={keyword}&zone=com"
+            print(f"📡 Fetching: {url}")
             
-            if 'domains' in data:
-                for item in data['domains'][:3]:  # 每个关键词取 3 个
-                    domain_name = item['domain']
+            response = requests.get(url, headers=headers, timeout=10)
+            print(f"📥 HTTP Status: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"⚠️ API error for '{keyword}': {response.text}")
+                continue
+            
+            data = response.json()
+            print(f"📦 API returned: {data.get('total', 0)} domains for '{keyword}'")
+            
+            if 'domains' in data and len(data['domains']) > 0:
+                for item in data['domains'][:5]:
+                    domain_name = item.get('domain', '')
                     
-                    # 初始化域名数据
+                    if not domain_name or len(domain_name) > 20:
+                        continue
+                    
+                    print(f"  → {domain_name}")
+                    
                     all_domains.append({
                         'name': domain_name,
-                        'da_score': 0,  # 稍后用 OpenPageRank 填充
+                        'da_score': 0,
                         'backlinks': random.randint(100, 800),
                         'spam_score': random.randint(0, 12),
                         'drop_date': (datetime.now() + timedelta(days=random.randint(1, 30))).date(),
                         'tld': domain_name.split('.')[-1] if '.' in domain_name else 'com',
                         'length': len(domain_name.split('.')[0]) if '.' in domain_name else len(domain_name)
                     })
+            else:
+                print(f"⚠️ No domains found for '{keyword}'")
                     
         except Exception as e:
-            print(f"❌ DomainDB error for keyword '{keyword}': {e}")
+            print(f"❌ Error for keyword '{keyword}': {e}")
             continue
     
-    print(f"📦 DomainDB 返回 {len(all_domains)} 个域名")
-    return all_domains[:20]  # 最多返回 20 个
+    print(f"📦 DomainDB 总共返回 {len(all_domains)} 个域名")
+    return all_domains[:20]
 
 
 def fetch_from_expireddomains() -> List[Dict]:
@@ -86,7 +106,6 @@ def fetch_from_expireddomains() -> List[Dict]:
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
     
     driver = None
     domains = []
@@ -95,42 +114,37 @@ def fetch_from_expireddomains() -> List[Dict]:
         driver = webdriver.Chrome(options=chrome_options)
         print("🔐 正在登录 ExpiredDomains.net...")
         
-        # 1. 访问登录页
         driver.get('https://member.expireddomains.net/login/')
         time.sleep(3)
         
-        # 2. 填写账号密码
         username_field = driver.find_element(By.NAME, 'login')
         password_field = driver.find_element(By.NAME, 'password')
         
         username_field.send_keys(EXPIREDDOMAINS_USERNAME)
         password_field.send_keys(EXPIREDDOMAINS_PASSWORD)
         
-        # 3. 点击登录
         login_button = driver.find_element(By.NAME, 'submit')
         login_button.click()
         
         time.sleep(5)
         
-        # 4. 访问过期域名列表（筛选条件：.com/.net, DA>10, Backlinks>10）
         search_url = 'https://member.expireddomains.net/domains/expireddomains/?start=1&ftlds[]=2&ftlds[]=3&fmoza=10&fdomainpop=10&flastup=30'
         driver.get(search_url)
         
         time.sleep(5)
         
-        # 5. 解析表格数据
         print("📊 正在解析域名数据...")
         table_rows = driver.find_elements(By.CSS_SELECTOR, 'table.base1 tbody tr')
         
-        for row in table_rows[:15]:  # 只取前 15 个
+        for row in table_rows[:15]:
             try:
                 cols = row.find_elements(By.TAG_NAME, 'td')
                 if len(cols) < 10:
                     continue
                 
-                domain_name = cols[1].text.strip()  # 域名列
-                da_text = cols[5].text.strip()  # Moz DA 列
-                backlinks_text = cols[6].text.strip()  # Backlinks 列
+                domain_name = cols[1].text.strip()
+                da_text = cols[5].text.strip()
+                backlinks_text = cols[6].text.strip()
                 
                 da_score = int(da_text) if da_text.isdigit() else 0
                 backlinks = int(backlinks_text.replace(',', '')) if backlinks_text.replace(',', '').isdigit() else 0
@@ -166,10 +180,10 @@ def enrich_with_pagerank(domains: List[Dict]) -> List[Dict]:
     """为域名列表添加真实的 DA 分数"""
     print("🔍 正在获取域名的 PageRank 数据...")
     
-    for domain in domains:
-        if domain['da_score'] == 0:  # 只查询没有 DA 的域名
+    for domain in domains[:10]:  # 只查询前 10 个，避免超出 API 限额
+        if domain['da_score'] == 0:
             domain['da_score'] = get_open_pagerank(domain['name'])
-            time.sleep(0.5)  # 避免 API 限流
+            time.sleep(0.5)
     
     return domains
 
@@ -206,15 +220,6 @@ class DomainScanner:
     """域名扫描器主类"""
     
     def __init__(self, mode='mock'):
-        """
-        初始化扫描器
-        
-        mode 参数:
-        - 'mock': 模拟数据
-        - 'domainsdb': DomainDB + OpenPageRank（推荐）
-        - 'expireddomains': ExpiredDomains.net 爬虫（需要密码）
-        - 'mixed': 混合两种真实数据源
-        """
         self.mode = mode
     
     def scan(self) -> List[Dict]:
@@ -227,12 +232,22 @@ class DomainScanner:
         elif self.mode == 'domainsdb':
             print("🌐 使用 DomainDB + OpenPageRank 模式")
             domains = fetch_from_domainsdb()
+            
+            if len(domains) == 0:
+                print("⚠️ DomainDB 返回 0 个域名，回退到模拟数据")
+                return generate_mock_domains()[:8]
+            
             domains = enrich_with_pagerank(domains)
             return self._filter_high_quality(domains)
         
         elif self.mode == 'expireddomains':
             print("🕷️ 使用 ExpiredDomains.net 爬虫模式")
             domains = fetch_from_expireddomains()
+            
+            if len(domains) == 0:
+                print("⚠️ ExpiredDomains 返回 0 个域名，回退到模拟数据")
+                return generate_mock_domains()[:8]
+            
             return self._filter_high_quality(domains)
         
         elif self.mode == 'mixed':
@@ -242,6 +257,11 @@ class DomainScanner:
             domains2 = fetch_from_expireddomains()
             
             all_domains = domains1 + domains2
+            
+            if len(all_domains) == 0:
+                print("⚠️ 所有数据源都返回 0，使用模拟数据")
+                return generate_mock_domains()[:8]
+            
             return self._filter_high_quality(all_domains)
         
         else:
@@ -255,8 +275,7 @@ class DomainScanner:
             if d['da_score'] >= 20 and d['spam_score'] < 15 and d['length'] <= 15
         ]
         
-        # 按 DA 降序排列
         filtered.sort(key=lambda x: x['da_score'], reverse=True)
         
         print(f"✅ 过滤后剩余 {len(filtered)} 个高质量域名")
-        return filtered[:15]  # 最多返回 15 个
+        return filtered[:15]
