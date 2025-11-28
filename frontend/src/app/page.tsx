@@ -82,7 +82,7 @@ export default function Home() {
       setError(null);
       
       console.log('📞 Calling startScan API...');
-      const result = await startScan('domainsdb');
+      const result = await startScan('expireddomains');
       
       console.log('✅ Scan completed:', result);
       
