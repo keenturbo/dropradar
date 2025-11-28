@@ -1,5 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.database import engine, Base
+from app.api.v1 import endpoints
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="DropRadar API",
@@ -31,6 +36,5 @@ async def health_check():
     return {"status": "healthy"}
 
 
-# API endpoints will be added here
-# from app.api.v1 import endpoints
-# app.include_router(endpoints.router, prefix="/api/v1")
+# Include API routes
+app.include_router(endpoints.router, prefix="/api/v1", tags=["domains"])
