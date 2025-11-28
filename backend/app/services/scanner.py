@@ -133,28 +133,49 @@ def fetch_from_expireddomains() -> List[Dict]:
                 driver.get('https://www.expireddomains.net/')
                 time.sleep(2)
                 
-                # 2. 注入 Cookie
-                cookies = EXPIREDDOMAINS_COOKIE.split(';')
-                for cookie in cookies:
-                    if '=' in cookie:
-                        name, value = cookie.strip().split('=', 1)
-                        try:
-                            driver.add_cookie({
-                                'name': name,
-                                'value': value,
-                                'domain': '.expireddomains.net'
-                            })
-                        except Exception as e:
-                            print(f"⚠️ Cookie 注入失败: {name} - {e}")
+                # 2. 注入 Cookie（支持多种格式）
+                cookies_to_add = []
                 
-                print("✅ Cookie 已注入")
+                # 解析 Cookie 字符串
+                cookie_pairs = EXPIREDDOMAINS_COOKIE.split(';')
+                for cookie_pair in cookie_pairs:
+                    cookie_pair = cookie_pair.strip()
+                    if '=' in cookie_pair:
+                        name, value = cookie_pair.split('=', 1)
+                        name = name.strip()
+                        value = value.strip()
+                        
+                        # 添加到列表
+                        cookies_to_add.append({
+                            'name': name,
+                            'value': value,
+                            'domain': '.expireddomains.net',  # 🔥 关键：支持子域名
+                            'path': '/',
+                            'secure': True,
+                            'httpOnly': True if name == 'ExpiredDomainssessid' else False
+                        })
+                
+                # 注入所有 Cookie
+                for cookie in cookies_to_add:
+                    try:
+                        driver.add_cookie(cookie)
+                        print(f"✅ Cookie 已注入: {cookie['name']}")
+                    except Exception as e:
+                        print(f"⚠️ Cookie 注入失败: {cookie['name']} - {e}")
                 
                 # 3. 直接访问会员页面验证
+                print("🔗 访问会员页面验证登录状态...")
                 driver.get('https://member.expireddomains.net/')
                 time.sleep(3)
                 
+                current_url = driver.current_url
+                page_title = driver.title
+                
+                print(f"📍 当前 URL: {current_url}")
+                print(f"📄 页面标题: {page_title}")
+                
                 # 检查是否登录成功
-                if 'login' not in driver.current_url.lower() and 'member.expireddomains.net' in driver.current_url:
+                if 'login' not in current_url.lower() and 'member.expireddomains.net' in current_url:
                     print("✅ Cookie 登录成功！")
                     login_success = True
                 else:
@@ -162,6 +183,8 @@ def fetch_from_expireddomains() -> List[Dict]:
                     
             except Exception as e:
                 print(f"❌ Cookie 登录失败: {e}")
+                import traceback
+                traceback.print_exc()
         
         # ========== 方式 2: 密码登录（备用）==========
         if not login_success:
@@ -225,6 +248,7 @@ def fetch_from_expireddomains() -> List[Dict]:
             if 'login' in current_url.lower():
                 print("❌ 密码登录失败（可能需要验证码），请配置 Cookie 登录")
                 print("💡 提示：手动登录一次，然后复制浏览器 Cookie 到环境变量 EXPIREDDOMAINS_COOKIE")
+                print("📝 Cookie 格式：reme=xxx; ExpiredDomainssessid=yyy")
                 return []
             
             print("✅ 密码登录成功！")
