@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.database import get_db
 from app.models.domain import Domain, DomainStatus
@@ -48,7 +48,7 @@ def get_domains(
 
 @router.post("/scan")
 def start_scan(
-    mode: str = 'domainsdb',
+    mode: str = 'expireddomains',
     bark_key: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
@@ -166,8 +166,64 @@ def test_notification(request: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 🆕 删除功能 - 注意路由顺序！
+# 🆕 到期检查功能
+@router.get("/check-expiring")
+def check_expiring_domains(
+    bark_key: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """检查即将到期的域名（今天和明天）"""
+    try:
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
+        
+        print(f"🔍 Checking for domains expiring on {today} or {tomorrow}")
+        
+        expiring_soon = db.query(Domain).filter(
+            (Domain.drop_date == today) | (Domain.drop_date == tomorrow)
+        ).all()
+        
+        print(f"📦 Found {len(expiring_soon)} expiring domains")
+        
+        if bark_key and expiring_soon:
+            print("📲 Sending Bark notifications...")
+            for domain in expiring_soon[:5]:  # 最多通知 5 个
+                days_left = (domain.drop_date - today).days
+                
+                if days_left == 0:
+                    title = "🚨 域名今天到期"
+                elif days_left == 1:
+                    title = "⏰ 域名明天到期"
+                else:
+                    title = f"⏰ 域名 {days_left} 天后到期"
+                
+                notify_bark(
+                    bark_key=bark_key,
+                    title=title,
+                    content=f"{domain.name} | DA:{domain.da_score} | Spam:{domain.spam_score}%",
+                    url=f"https://www.namecheap.com/domains/registration/results/?domain={domain.name}"
+                )
+                print(f"✅ Notified: {domain.name} (expires in {days_left} days)")
+        
+        return {
+            "status": "success",
+            "expiring_count": len(expiring_soon),
+            "domains": [
+                {
+                    "name": d.name,
+                    "drop_date": d.drop_date.isoformat(),
+                    "da_score": d.da_score,
+                    "days_left": (d.drop_date - today).days
+                }
+                for d in expiring_soon
+            ]
+        }
+    except Exception as e:
+        print(f"❌ Check expiring failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+# 删除功能
 @router.delete("/domains/all")
 def clear_all_domains(db: Session = Depends(get_db)):
     """清空所有域名"""
