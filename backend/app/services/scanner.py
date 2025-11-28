@@ -5,11 +5,13 @@ from typing import List, Dict
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import time
 
 # ========== 配置信息 ==========
 OPENPAGERANK_API_KEY = "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84"
-DOMAINSDB_API_KEY = "7f783667-ba54-4954-94fa-760d83765a85"  # 🆕 添加 DomainDB API Key
+DOMAINSDB_API_KEY = "7f783667-ba54-4954-94fa-760d83765a85"
 EXPIREDDOMAINS_USERNAME = "turboexpireddomains"
 EXPIREDDOMAINS_PASSWORD = "zeBtu2-kigsij-teqmab"  # ⚠️ 需要你填写密码
 
@@ -39,13 +41,12 @@ def get_open_pagerank(domain: str) -> int:
 def fetch_from_domainsdb(keywords: List[str] = None) -> List[Dict]:
     """方案 1: 从 DomainDB 获取域名列表（需要 API Key）"""
     if not keywords:
-        keywords = ['ai', 'gpt', 'tech', 'crypto', 'web3', 'quantum', 'neural', 'meta', 'defi']
+        keywords = ['ai', 'crypto', 'web3']
     
     all_domains = []
     
     print(f"🔍 Querying DomainDB with {len(keywords)} keywords")
     
-    # 🆕 添加 Authorization header
     headers = {
         'Authorization': f'Bearer {DOMAINSDB_API_KEY}'
     }
@@ -66,7 +67,7 @@ def fetch_from_domainsdb(keywords: List[str] = None) -> List[Dict]:
             print(f"📦 API returned: {data.get('total', 0)} domains for '{keyword}'")
             
             if 'domains' in data and len(data['domains']) > 0:
-                for item in data['domains'][:5]:
+                for item in data['domains'][:3]:
                     domain_name = item.get('domain', '')
                     
                     if not domain_name or len(domain_name) > 20:
@@ -95,7 +96,7 @@ def fetch_from_domainsdb(keywords: List[str] = None) -> List[Dict]:
 
 
 def fetch_from_expireddomains() -> List[Dict]:
-    """方案 2: 从 ExpiredDomains.net 爬取（需要登录）"""
+    """方案 2: 从 ExpiredDomains.net 爬取（需要登录）- 修复版"""
     
     if EXPIREDDOMAINS_PASSWORD == "YOUR_PASSWORD_HERE":
         print("⚠️ ExpiredDomains 密码未配置，跳过该数据源")
@@ -106,6 +107,7 @@ def fetch_from_expireddomains() -> List[Dict]:
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
     
     driver = None
     domains = []
@@ -114,27 +116,56 @@ def fetch_from_expireddomains() -> List[Dict]:
         driver = webdriver.Chrome(options=chrome_options)
         print("🔐 正在登录 ExpiredDomains.net...")
         
+        # 1. 访问登录页
         driver.get('https://member.expireddomains.net/login/')
-        time.sleep(3)
         
-        username_field = driver.find_element(By.NAME, 'login')
+        # 🆕 等待页面完全加载
+        wait = WebDriverWait(driver, 15)
+        
+        # 2. 等待并填写账号密码
+        print("⏳ 等待登录表单加载...")
+        username_field = wait.until(EC.presence_of_element_located((By.NAME, 'login')))
         password_field = driver.find_element(By.NAME, 'password')
+        
+        username_field.clear()
+        password_field.clear()
         
         username_field.send_keys(EXPIREDDOMAINS_USERNAME)
         password_field.send_keys(EXPIREDDOMAINS_PASSWORD)
         
+        print(f"✅ 已填写账号: {EXPIREDDOMAINS_USERNAME}")
+        
+        # 3. 点击登录
         login_button = driver.find_element(By.NAME, 'submit')
         login_button.click()
         
+        print("⏳ 等待登录完成...")
         time.sleep(5)
         
+        # 验证登录成功（检查是否跳转）
+        current_url = driver.current_url
+        print(f"📍 当前 URL: {current_url}")
+        
+        if 'login' in current_url.lower():
+            print("❌ 登录失败，仍在登录页面")
+            return []
+        
+        print("✅ 登录成功，正在获取域名列表...")
+        
+        # 4. 访问过期域名列表
         search_url = 'https://member.expireddomains.net/domains/expireddomains/?start=1&ftlds[]=2&ftlds[]=3&fmoza=10&fdomainpop=10&flastup=30'
         driver.get(search_url)
         
-        time.sleep(5)
+        # 🆕 等待表格加载
+        print("⏳ 等待域名表格加载...")
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'table.base1')))
+        time.sleep(3)
         
+        # 5. 解析表格数据
         print("📊 正在解析域名数据...")
         table_rows = driver.find_elements(By.CSS_SELECTOR, 'table.base1 tbody tr')
+        
+        print(f"📦 找到 {len(table_rows)} 行数据")
         
         for row in table_rows[:15]:
             try:
@@ -149,7 +180,7 @@ def fetch_from_expireddomains() -> List[Dict]:
                 da_score = int(da_text) if da_text.isdigit() else 0
                 backlinks = int(backlinks_text.replace(',', '')) if backlinks_text.replace(',', '').isdigit() else 0
                 
-                if da_score > 20 and len(domain_name) < 15:
+                if da_score > 20 and len(domain_name) < 15 and domain_name:
                     domains.append({
                         'name': domain_name,
                         'da_score': da_score,
@@ -159,6 +190,7 @@ def fetch_from_expireddomains() -> List[Dict]:
                         'tld': domain_name.split('.')[-1] if '.' in domain_name else 'com',
                         'length': len(domain_name.split('.')[0]) if '.' in domain_name else len(domain_name)
                     })
+                    print(f"✅ 找到域名: {domain_name} (DA: {da_score}, BL: {backlinks})")
                     
             except Exception as e:
                 print(f"⚠️ 解析行数据失败: {e}")
@@ -168,6 +200,8 @@ def fetch_from_expireddomains() -> List[Dict]:
         
     except Exception as e:
         print(f"❌ ExpiredDomains 爬取失败: {e}")
+        import traceback
+        traceback.print_exc()
         
     finally:
         if driver:
@@ -180,7 +214,7 @@ def enrich_with_pagerank(domains: List[Dict]) -> List[Dict]:
     """为域名列表添加真实的 DA 分数"""
     print("🔍 正在获取域名的 PageRank 数据...")
     
-    for domain in domains[:10]:  # 只查询前 10 个，避免超出 API 限额
+    for domain in domains[:10]:
         if domain['da_score'] == 0:
             domain['da_score'] = get_open_pagerank(domain['name'])
             time.sleep(0.5)
