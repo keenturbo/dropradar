@@ -1,194 +1,251 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getDomains, getStats, startScan, Domain, Stats } from '@/lib/api';
+import { getDomains, getStats, startScan } from '@/lib/api';
+
+interface Domain {
+  id: number;
+  name: string;
+  da_score: number;
+  backlinks: number;
+  spam_score: number;
+  status: string;
+  drop_date: string;
+  tld: string;
+  length: number;
+}
+
+interface Stats {
+  total: number;
+  avg_da: number;
+  available: number;
+  low_spam: number;
+}
 
 export default function Home() {
   const [domains, setDomains] = useState<Domain[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [scanning, setScanning] = useState(false);
+  const [stats, setStats] = useState<Stats>({ total: 0, avg_da: 0, available: 0, low_spam: 0 });
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 初始加载数据
+  // 页面加载时获取数据
   useEffect(() => {
-    loadData();
+    fetchData();
   }, []);
 
-  const loadData = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchData = async () => {
     try {
+      setLoading(true);
+      setError(null);
+      
       const [domainsData, statsData] = await Promise.all([
         getDomains(),
-        getStats(),
+        getStats()
       ]);
-      setDomains(domainsData);
-      setStats(statsData);
+      
+      console.log('Domains data:', domainsData);
+      console.log('Stats data:', statsData);
+      
+      // 验证并设置域名数据
+      if (domainsData && Array.isArray(domainsData.domains)) {
+        setDomains(domainsData.domains);
+      } else {
+        console.error('Invalid domains data structure:', domainsData);
+        setDomains([]);
+      }
+      
+      // 验证并设置统计数据
+      if (statsData && typeof statsData === 'object') {
+        setStats({
+          total: statsData.total || 0,
+          avg_da: statsData.avg_da || 0,
+          available: statsData.available || 0,
+          low_spam: statsData.low_spam || 0
+        });
+      } else {
+        console.error('Invalid stats data structure:', statsData);
+      }
+      
     } catch (err) {
-      setError('Failed to load data from backend');
-      console.error(err);
+      console.error('Failed to fetch data:', err);
+      setError('无法连接到后端 API，请检查 Railway 部署状态');
+      setDomains([]);
+      setStats({ total: 0, avg_da: 0, available: 0, low_spam: 0 });
     } finally {
       setLoading(false);
     }
   };
 
+  // 手动触发扫描
   const handleScan = async () => {
-    setScanning(true);
-    setError(null);
     try {
+      setScanning(true);
+      setError(null);
+      
       const result = await startScan();
       console.log('Scan result:', result);
-      // 扫描完成后重新加载数据
-      await loadData();
+      
+      // 扫描完成后重新获取数据
+      await fetchData();
+      
     } catch (err) {
-      setError('Scan failed. Please try again.');
-      console.error(err);
+      console.error('Scan failed:', err);
+      setError('扫描失败，请重试');
     } finally {
       setScanning(false);
     }
   };
 
+  // 格式化日期
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('zh-CN', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit' 
+    });
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
       {/* Header */}
-      <header className="border-b border-slate-700 bg-slate-900/50 backdrop-blur-sm">
-        <div className="container mx-auto px-4 py-6">
+      <header className="border-b border-gray-700 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-10">
+        <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-                <span className="text-4xl">📡</span>
-                DropRadar
-              </h1>
-              <p className="text-slate-400 mt-1">High-Value Expired Domain Monitor</p>
+              <h1 className="text-3xl font-bold text-white">DropRadar</h1>
+              <p className="text-gray-400 text-sm mt-1">高价值过期域名监控雷达</p>
             </div>
             <button
               onClick={handleScan}
               disabled={scanning || loading}
-              className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white rounded-lg font-semibold transition-all"
+              className={`px-6 py-3 rounded-lg font-semibold transition-all ${
+                scanning || loading
+                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-blue-500/50'
+              }`}
             >
-              {scanning ? 'Scanning...' : 'Start Scan'}
+              {scanning ? '扫描中...' : '🔍 Start Scan'}
             </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
         {/* Error Message */}
         {error && (
-          <div className="mb-6 bg-red-900/20 border border-red-800 text-red-400 px-6 py-4 rounded-lg">
-            {error}
+          <div className="mb-6 p-4 bg-red-900/50 border border-red-700 rounded-lg text-red-200">
+            ⚠️ {error}
           </div>
         )}
 
         {/* Stats Cards */}
-        {stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-            <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg p-6">
-              <div className="text-slate-400 text-sm font-medium">Total Domains</div>
-              <div className="text-3xl font-bold text-white mt-2">{stats.total_domains}</div>
-            </div>
-            <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg p-6">
-              <div className="text-slate-400 text-sm font-medium">Avg DA Score</div>
-              <div className="text-3xl font-bold text-white mt-2">{stats.avg_da}</div>
-            </div>
-            <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg p-6">
-              <div className="text-slate-400 text-sm font-medium">Available</div>
-              <div className="text-3xl font-bold text-green-400 mt-2">{stats.available_count}</div>
-            </div>
-            <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg p-6">
-              <div className="text-slate-400 text-sm font-medium">Low Spam</div>
-              <div className="text-3xl font-bold text-blue-400 mt-2">{stats.low_spam_count}</div>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-blue-500 transition-all">
+            <div className="text-gray-400 text-sm mb-2">Total Domains</div>
+            <div className="text-3xl font-bold text-white">{stats.total}</div>
           </div>
-        )}
+          <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-green-500 transition-all">
+            <div className="text-gray-400 text-sm mb-2">Average DA</div>
+            <div className="text-3xl font-bold text-green-400">{stats.avg_da.toFixed(1)}</div>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-purple-500 transition-all">
+            <div className="text-gray-400 text-sm mb-2">Available</div>
+            <div className="text-3xl font-bold text-purple-400">{stats.available}</div>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-yellow-500 transition-all">
+            <div className="text-gray-400 text-sm mb-2">Low Spam Score</div>
+            <div className="text-3xl font-bold text-yellow-400">{stats.low_spam}</div>
+          </div>
+        </div>
 
         {/* Domain Table */}
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-lg overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-700">
-            <h2 className="text-xl font-semibold text-white">High-Value Domains</h2>
+        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-700 bg-gray-900/50">
+            <h2 className="text-xl font-semibold text-white">高价值域名列表</h2>
           </div>
-          
+
           {loading ? (
-            <div className="px-6 py-12 text-center text-slate-400">
-              Loading domains...
+            <div className="p-12 text-center">
+              <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+              <p className="text-gray-400 mt-4">加载中...</p>
             </div>
           ) : domains.length === 0 ? (
-            <div className="px-6 py-12 text-center text-slate-400">
-              No domains found. Click "Start Scan" to search for high-value expired domains.
+            <div className="p-12 text-center">
+              <p className="text-gray-400 text-lg">暂无数据</p>
+              <p className="text-gray-500 text-sm mt-2">点击右上角 "Start Scan" 开始扫描</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-slate-900/50">
+                <thead className="bg-gray-900/50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                       Domain
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                       DA Score
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                       Backlinks
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
-                      Spam %
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                      Spam Score
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                       Status
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                       Drop Date
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                       Action
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-700">
+                <tbody className="divide-y divide-gray-700">
                   {domains.map((domain) => (
-                    <tr key={domain.id} className="hover:bg-slate-700/30 transition-colors">
+                    <tr key={domain.id} className="hover:bg-gray-700/50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-white">{domain.name}</div>
+                        <div className="text-white font-medium">{domain.name}</div>
+                        <div className="text-gray-400 text-sm">{domain.tld} • {domain.length} chars</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className={`text-sm font-semibold ${
-                          domain.da_score >= 45 ? 'text-green-400' : 
-                          domain.da_score >= 35 ? 'text-yellow-400' : 'text-slate-400'
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${
+                          domain.da_score >= 40 ? 'bg-green-900 text-green-300' :
+                          domain.da_score >= 30 ? 'bg-yellow-900 text-yellow-300' :
+                          'bg-gray-700 text-gray-300'
                         }`}>
                           {domain.da_score}
-                        </div>
+                        </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-300">
-                        {domain.backlinks_count.toLocaleString()}
+                      <td className="px-6 py-4 whitespace-nowrap text-gray-300">
+                        {domain.backlinks.toLocaleString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className={`text-sm font-semibold ${
-                          domain.spam_score < 5 ? 'text-green-400' : 
-                          domain.spam_score < 10 ? 'text-yellow-400' : 'text-red-400'
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${
+                          domain.spam_score < 5 ? 'bg-green-900 text-green-300' :
+                          domain.spam_score < 10 ? 'bg-yellow-900 text-yellow-300' :
+                          'bg-red-900 text-red-300'
                         }`}>
                           {domain.spam_score}%
-                        </div>
+                        </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          domain.status === 'available' ? 'bg-green-900/30 text-green-400' :
-                          domain.status === 'auction' ? 'bg-yellow-900/30 text-yellow-400' :
-                          'bg-slate-700 text-slate-400'
-                        }`}>
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-blue-900 text-blue-300">
                           {domain.status}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-300">
-                        {domain.drop_date}
+                      <td className="px-6 py-4 whitespace-nowrap text-gray-300">
+                        {formatDate(domain.drop_date)}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <td className="px-6 py-4 whitespace-nowrap">
                         <a
                           href={`https://www.namecheap.com/domains/registration/results/?domain=${domain.name}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300 font-medium"
+                          className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
                         >
                           Register →
                         </a>
@@ -201,9 +258,9 @@ export default function Home() {
           )}
         </div>
 
-        {/* Footer Note */}
-        <div className="mt-8 text-center text-slate-500 text-sm">
-          <p>Connected to Railway Backend: https://dropradar-production.up.railway.app</p>
+        {/* Footer */}
+        <div className="mt-8 text-center text-gray-500 text-sm">
+          <p>Powered by Railway + Vercel • Built with Next.js + FastAPI</p>
         </div>
       </main>
     </div>
