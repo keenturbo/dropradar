@@ -48,7 +48,7 @@ def get_domains(
 
 @router.post("/scan")
 def start_scan(
-    mode: str = 'domainsdb',
+    mode: str = 'expireddomains',
     bark_key: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
@@ -163,4 +163,48 @@ def test_notification(request: dict):
         
         return {"status": "success", "message": "通知已发送"}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 🆕 删除功能
+@router.delete("/domains/{domain_id}")
+def delete_domain(domain_id: int, db: Session = Depends(get_db)):
+    """删除指定域名"""
+    try:
+        domain = db.query(Domain).filter(Domain.id == domain_id).first()
+        
+        if not domain:
+            raise HTTPException(status_code=404, detail="域名不存在")
+        
+        domain_name = domain.name
+        db.delete(domain)
+        db.commit()
+        
+        print(f"🗑️ Deleted domain: {domain_name} (ID: {domain_id})")
+        
+        return {"status": "success", "message": f"已删除域名: {domain_name}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Delete failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/domains/clear-all")
+def clear_all_domains(db: Session = Depends(get_db)):
+    """清空所有域名"""
+    try:
+        count = db.query(Domain).count()
+        db.query(Domain).delete()
+        db.commit()
+        
+        print(f"🗑️ Cleared all {count} domains from database")
+        
+        return {"status": "success", "message": f"已清空 {count} 个域名"}
+        
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Clear all failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
