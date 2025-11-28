@@ -48,7 +48,7 @@ def get_domains(
 
 @router.post("/scan")
 def start_scan(
-    mode: str = 'domainsdb',  # 默认使用 DomainDB + OpenPageRank
+    mode: str = 'domainsdb',
     bark_key: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
@@ -64,7 +64,6 @@ def start_scan(
     try:
         print(f"🔍 Starting scan with mode: {mode}")
         
-        # 初始化扫描器
         scanner = DomainScanner(mode=mode)
         found_domains = scanner.scan()
         
@@ -74,13 +73,11 @@ def start_scan(
         high_value_domains = []
         
         for domain_data in found_domains:
-            # 检查是否已存在
             existing = db.query(Domain).filter(Domain.name == domain_data['name']).first()
             if existing:
                 print(f"⏭️ Domain {domain_data['name']} already exists, skipping")
                 continue
             
-            # 创建新域名记录
             domain = Domain(
                 name=domain_data['name'],
                 da_score=domain_data['da_score'],
@@ -95,16 +92,14 @@ def start_scan(
             db.add(domain)
             new_count += 1
             
-            # 收集高价值域名用于通知
             if domain_data['da_score'] >= 40 and domain_data['spam_score'] < 10:
                 high_value_domains.append(domain_data)
         
         db.commit()
         
-        # 发送 Bark 通知（如果提供了 Key）
         if bark_key and high_value_domains:
             try:
-                for domain_data in high_value_domains[:3]:  # 最多通知 3 个
+                for domain_data in high_value_domains[:3]:
                     notify_bark(
                         bark_key=bark_key,
                         title="🚨 高价值域名发现",
@@ -152,3 +147,20 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 @router.post("/test-notification")
+def test_notification(request: dict):
+    """测试 Bark 通知"""
+    try:
+        bark_key = request.get("bark_key")
+        if not bark_key:
+            raise HTTPException(status_code=400, detail="bark_key is required")
+        
+        notify_bark(
+            bark_key=bark_key,
+            title="🔔 DropRadar 测试通知",
+            content="Bark 通知系统工作正常！",
+            url="https://github.com/keenturbo/dropradar"
+        )
+        
+        return {"status": "success", "message": "通知已发送"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
