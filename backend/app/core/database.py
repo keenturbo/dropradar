@@ -31,5 +31,11 @@ def get_db():
 def init_db():
     """
     Initialize database tables
+    Creates all tables defined in models if they don't exist
     """
+    # Import models to register them with Base
+    from app.models import domain  # noqa: F401
+    
+    # Create all tables
     Base.metadata.create_all(bind=engine)
+    print(f"✅ Created tables: {list(Base.metadata.tables.keys())}")
