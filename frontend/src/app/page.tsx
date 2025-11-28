@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getDomains, getStats, startScan } from '@/lib/api';
+import { getDomains, getStats, startScan, deleteDomain, clearAllDomains } from '@/lib/api';
 
 interface Domain {
   id: number;
@@ -107,6 +107,36 @@ export default function Home() {
     }
   };
 
+  // 🆕 删除单个域名
+  const handleDelete = async (domainId: number, domainName: string) => {
+    if (!confirm(`确认删除域名 ${domainName}？`)) {
+      return;
+    }
+    
+    try {
+      await deleteDomain(domainId);
+      alert('删除成功');
+      await fetchData();
+    } catch (err) {
+      alert('删除失败');
+    }
+  };
+
+  // 🆕 清空所有域名
+  const handleClearAll = async () => {
+    if (!confirm('确认清空所有域名？此操作不可恢复！')) {
+      return;
+    }
+    
+    try {
+      const result = await clearAllDomains();
+      alert(result.message);
+      await fetchData();
+    } catch (err) {
+      alert('清空失败');
+    }
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('zh-CN', { 
@@ -125,17 +155,25 @@ export default function Home() {
               <h1 className="text-3xl font-bold text-white">DropRadar</h1>
               <p className="text-gray-400 text-sm mt-1">高价值过期域名监控雷达</p>
             </div>
-            <button
-              onClick={handleScan}
-              disabled={scanning || loading}
-              className={`px-6 py-3 rounded-lg font-semibold transition-all ${
-                scanning || loading
-                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-blue-500/50'
-              }`}
-            >
-              {scanning ? '扫描中...' : '🔍 Start Scan'}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={handleClearAll}
+                className="px-6 py-3 rounded-lg font-semibold bg-red-600 hover:bg-red-700 text-white transition-all"
+              >
+                🗑️ 清空所有
+              </button>
+              <button
+                onClick={handleScan}
+                disabled={scanning || loading}
+                className={`px-6 py-3 rounded-lg font-semibold transition-all ${
+                  scanning || loading
+                    ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-blue-500/50'
+                }`}
+              >
+                {scanning ? '扫描中...' : '🔍 Start Scan'}
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -232,14 +270,22 @@ export default function Home() {
                         {formatDate(domain.drop_date)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <a
-                          href={`https://www.namecheap.com/domains/registration/results/?domain=${domain.name}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-                        >
-                          Register →
-                        </a>
+                        <div className="flex gap-2">
+                          <a
+                            href={`https://www.namecheap.com/domains/registration/results/?domain=${domain.name}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+                          >
+                            Register →
+                          </a>
+                          <button
+                            onClick={() => handleDelete(domain.id, domain.name)}
+                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors"
+                          >
+                            删除
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
