@@ -129,11 +129,9 @@ def fetch_from_expireddomains() -> List[Dict]:
             print("🍪 尝试使用 Cookie 登录...")
             
             try:
-                # 1. 先访问首页，建立 session
                 driver.get('https://www.expireddomains.net/')
                 time.sleep(2)
                 
-                # 2. 注入 Cookie
                 cookies_to_add = []
                 cookie_pairs = EXPIREDDOMAINS_COOKIE.split(';')
                 for cookie_pair in cookie_pairs:
@@ -159,7 +157,6 @@ def fetch_from_expireddomains() -> List[Dict]:
                     except Exception as e:
                         print(f"⚠️ Cookie 注入失败: {cookie['name']} - {e}")
                 
-                # 3. 验证登录状态
                 print("🔗 访问会员页面验证登录状态...")
                 driver.get('https://member.expireddomains.net/')
                 time.sleep(3)
@@ -248,7 +245,6 @@ def fetch_from_expireddomains() -> List[Dict]:
         
         print("📊 正在获取域名列表...")
         
-        # 🆕 使用 Namecheap Auctions 列表（简单，无复杂过滤）
         search_url = 'https://member.expireddomains.net/domains/namecheapauctions/'
         print(f"🔗 访问列表: {search_url}")
         driver.get(search_url)
@@ -256,13 +252,11 @@ def fetch_from_expireddomains() -> List[Dict]:
         print("⏳ 等待域名表格加载...")
         wait = WebDriverWait(driver, 20)
         
-        # 等待表格出现
         try:
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'table.base1')))
             time.sleep(3)
         except Exception as e:
             print(f"❌ 表格加载超时: {e}")
-            # 保存页面源代码用于调试
             print(f"📄 当前页面标题: {driver.title}")
             print(f"📍 当前 URL: {driver.current_url}")
             return []
@@ -271,41 +265,52 @@ def fetch_from_expireddomains() -> List[Dict]:
         table_rows = driver.find_elements(By.CSS_SELECTOR, 'table.base1 tbody tr')
         print(f"📦 找到 {len(table_rows)} 行数据")
         
-        # 🆕 解析表格（增加详细日志）
-        for idx, row in enumerate(table_rows[:20]):  # 增加到 20 条
+        # 🔥 修复：域名在第1列（cols[0]）而不是第2列（cols[1]）
+        for idx, row in enumerate(table_rows[:20]):
             try:
                 cols = row.find_elements(By.TAG_NAME, 'td')
                 
-                if len(cols) < 5:
+                if len(cols) < 2:
                     print(f"⚠️ 第 {idx+1} 行列数不足: {len(cols)}")
                     continue
                 
-                # 🔍 调试：打印前几列内容
-                if idx < 3:  # 只打印前3行用于调试
-                    print(f"🔍 第 {idx+1} 行前5列: [{cols[0].text}] [{cols[1].text}] [{cols[2].text}] [{cols[3].text}] [{cols[4].text}]")
+                # 调试：打印前3行的前5列
+                if idx < 3:
+                    print(f"🔍 第 {idx+1} 行前5列: [{cols[0].text}] [{cols[1].text if len(cols) > 1 else ''}] [{cols[2].text if len(cols) > 2 else ''}] [{cols[3].text if len(cols) > 3 else ''}] [{cols[4].text if len(cols) > 4 else ''}]")
                 
-                # 🆕 根据实际表格结构调整（通常第2列是域名）
-                domain_name = cols[1].text.strip()
+                # 🆕 修复：从第1列（cols[0]）获取域名
+                domain_name = cols[0].text.strip()
                 
                 # 跳过表头或空行
                 if not domain_name or domain_name.lower() in ['domain', 'name', '']:
                     continue
                 
-                # 🆕 尝试提取数值列（通常是后面的列）
+                # 尝试从后面的列提取数值
                 da_score = 0
                 backlinks = 0
                 
-                # 尝试从各列提取数字
-                for col_idx in range(2, min(len(cols), 10)):
-                    text = cols[col_idx].text.strip().replace(',', '')
-                    if text.isdigit():
-                        num = int(text)
-                        if 0 <= num <= 100 and da_score == 0:  # 可能是 DA/PA 分数
+                for col_idx in range(1, min(len(cols), 10)):
+                    text = cols[col_idx].text.strip().replace(',', '').replace('K', '000').replace('k', '000')
+                    
+                    # 尝试提取数字（支持 1.8K 格式）
+                    try:
+                        # 处理小数点
+                        if '.' in text:
+                            num = int(float(text.split()[0]))  # 取第一个数字
+                        elif text.isdigit():
+                            num = int(text)
+                        else:
+                            continue
+                        
+                        # 判断是DA还是反链
+                        if 0 <= num <= 100 and da_score == 0:
                             da_score = num
-                        elif num > 100 and backlinks == 0:  # 可能是反链数量
+                        elif num > 100 and backlinks == 0:
                             backlinks = num
+                    except:
+                        continue
                 
-                # 🆕 降低过滤标准，只要有域名就添加
+                # 🆕 只要有域名就添加（降低门槛）
                 if domain_name and '.' in domain_name:
                     domains.append({
                         'name': domain_name,
@@ -430,13 +435,12 @@ class DomainScanner:
     
     def _filter_high_quality(self, domains: List[Dict]) -> List[Dict]:
         """过滤高质量域名"""
-        # 🆕 降低过滤标准
         filtered = [
             d for d in domains 
-            if d.get('da_score', 0) >= 0 and d.get('length', 99) <= 20  # 移除 DA 和垃圾评分限制
+            if d.get('da_score', 0) >= 0 and d.get('length', 99) <= 20
         ]
         
         filtered.sort(key=lambda x: x.get('da_score', 0), reverse=True)
         
         print(f"✅ 过滤后剩余 {len(filtered)} 个域名")
-        return filtered[:20]  # 增加到 20 个
+        return filtered[:20]
