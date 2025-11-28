@@ -29,7 +29,6 @@ export default function Home() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 页面加载时获取数据
   useEffect(() => {
     fetchData();
   }, []);
@@ -39,23 +38,22 @@ export default function Home() {
       setLoading(true);
       setError(null);
       
-      const [domainsData, statsData] = await Promise.all([
+      const [domainsResponse, statsData] = await Promise.all([
         getDomains(),
         getStats()
       ]);
       
-      console.log('Domains data:', domainsData);
+      console.log('Domains response:', domainsResponse);
       console.log('Stats data:', statsData);
       
-      // 验证并设置域名数据
-      if (domainsData && Array.isArray(domainsData.domains)) {
-        setDomains(domainsData.domains);
+      // domainsResponse 是 { domains: Domain[], total: number } 对象
+      if (domainsResponse && Array.isArray(domainsResponse.domains)) {
+        setDomains(domainsResponse.domains);
       } else {
-        console.error('Invalid domains data structure:', domainsData);
+        console.error('Invalid domains data structure:', domainsResponse);
         setDomains([]);
       }
       
-      // 验证并设置统计数据
       if (statsData && typeof statsData === 'object') {
         setStats({
           total: statsData.total || 0,
@@ -69,7 +67,7 @@ export default function Home() {
       
     } catch (err) {
       console.error('Failed to fetch data:', err);
-      setError('无法连接到后端 API，请检查 Railway 部署状态');
+      setError('无法连接到后端 API');
       setDomains([]);
       setStats({ total: 0, avg_da: 0, available: 0, low_spam: 0 });
     } finally {
@@ -77,7 +75,6 @@ export default function Home() {
     }
   };
 
-  // 手动触发扫描
   const handleScan = async () => {
     try {
       setScanning(true);
@@ -86,7 +83,6 @@ export default function Home() {
       const result = await startScan();
       console.log('Scan result:', result);
       
-      // 扫描完成后重新获取数据
       await fetchData();
       
     } catch (err) {
@@ -97,7 +93,6 @@ export default function Home() {
     }
   };
 
-  // 格式化日期
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('zh-CN', { 
@@ -109,7 +104,6 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-      {/* Header */}
       <header className="border-b border-gray-700 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-10">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -133,14 +127,12 @@ export default function Home() {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        {/* Error Message */}
         {error && (
           <div className="mb-6 p-4 bg-red-900/50 border border-red-700 rounded-lg text-red-200">
             ⚠️ {error}
           </div>
         )}
 
-        {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-blue-500 transition-all">
             <div className="text-gray-400 text-sm mb-2">Total Domains</div>
@@ -160,7 +152,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Domain Table */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-700 bg-gray-900/50">
             <h2 className="text-xl font-semibold text-white">高价值域名列表</h2>
@@ -181,27 +172,13 @@ export default function Home() {
               <table className="w-full">
                 <thead className="bg-gray-900/50">
                   <tr>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Domain
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      DA Score
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Backlinks
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Spam Score
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Drop Date
-                    </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Action
-                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Domain</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">DA Score</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Backlinks</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Spam Score</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Drop Date</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
@@ -258,7 +235,6 @@ export default function Home() {
           )}
         </div>
 
-        {/* Footer */}
         <div className="mt-8 text-center text-gray-500 text-sm">
           <p>Powered by Railway + Vercel • Built with Next.js + FastAPI</p>
         </div>
