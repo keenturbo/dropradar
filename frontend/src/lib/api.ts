@@ -33,33 +33,61 @@ interface ScanResponse {
 }
 
 export async function getDomains(): Promise<DomainsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/domains`);
+  const response = await fetch(`${API_BASE_URL}/api/v1/domains`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+  
   if (!response.ok) {
-    throw new Error('Failed to fetch domains');
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
+  
   return response.json();
 }
 
 export async function getStats(): Promise<StatsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/stats`);
+  const response = await fetch(`${API_BASE_URL}/api/v1/stats`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+  
   if (!response.ok) {
-    throw new Error('Failed to fetch stats');
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
+  
   return response.json();
 }
 
-export async function startScan(barkKey?: string): Promise<ScanResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/scan`, {
+export async function startScan(mode: string = 'domainsdb', barkKey?: string): Promise<ScanResponse> {
+  console.log('🚀 API: Starting scan...', { mode, barkKey });
+  
+  const url = `${API_BASE_URL}/api/v1/scan?mode=${mode}`;
+  console.log('📡 API URL:', url);
+  
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ bark_key: barkKey }),
   });
+  
+  console.log('📥 API Response status:', response.status);
+  
   if (!response.ok) {
-    throw new Error('Scan failed');
+    const errorText = await response.text();
+    console.error('❌ API Error:', errorText);
+    throw new Error(`扫描失败: ${response.status} ${errorText}`);
   }
-  return response.json();
+  
+  const data = await response.json();
+  console.log('✅ API Response data:', data);
+  
+  return data;
 }
 
 export async function testNotification(barkKey: string): Promise<{ status: string; message: string }> {
@@ -70,8 +98,10 @@ export async function testNotification(barkKey: string): Promise<{ status: strin
     },
     body: JSON.stringify({ bark_key: barkKey }),
   });
+  
   if (!response.ok) {
     throw new Error('Notification test failed');
   }
+  
   return response.json();
 }
