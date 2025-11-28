@@ -133,7 +133,7 @@ def fetch_from_expireddomains() -> List[Dict]:
         print("🔐 正在登录 ExpiredDomains.net...")
         
         # 1. 访问登录页
-        driver.get('https://member.expireddomains.net/login/')
+        driver.get('https://www.expireddomains.net/login/')
         time.sleep(3)
         
         # 🆕 调试：保存页面源码
