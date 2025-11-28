@@ -46,7 +46,6 @@ export default function Home() {
       console.log('Domains response:', domainsResponse);
       console.log('Stats data:', statsData);
       
-      // domainsResponse 是 { domains: Domain[], total: number } 对象
       if (domainsResponse && Array.isArray(domainsResponse.domains)) {
         setDomains(domainsResponse.domains);
       } else {
@@ -76,20 +75,35 @@ export default function Home() {
   };
 
   const handleScan = async () => {
+    console.log('🔘 Scan button clicked');
+    
     try {
       setScanning(true);
       setError(null);
       
-      const result = await startScan();
-      console.log('Scan result:', result);
+      console.log('📞 Calling startScan API...');
+      const result = await startScan('domainsdb');
       
+      console.log('✅ Scan completed:', result);
+      
+      if (typeof window !== 'undefined' && window.alert) {
+        window.alert(`✅ ${result.message}`);
+      }
+      
+      console.log('🔄 Refreshing data...');
       await fetchData();
       
-    } catch (err) {
-      console.error('Scan failed:', err);
-      setError('扫描失败，请重试');
+    } catch (err: any) {
+      console.error('❌ Scan error:', err);
+      const errorMsg = err.message || '扫描失败，请检查网络连接';
+      setError(errorMsg);
+      
+      if (typeof window !== 'undefined' && window.alert) {
+        window.alert(`❌ ${errorMsg}`);
+      }
     } finally {
       setScanning(false);
+      console.log('🏁 Scan process finished');
     }
   };
 
