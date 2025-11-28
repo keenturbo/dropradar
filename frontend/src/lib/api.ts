@@ -62,7 +62,7 @@ export async function getStats(): Promise<StatsResponse> {
   return response.json();
 }
 
-export async function startScan(mode: string = 'expireddomains', barkKey?: string): Promise<ScanResponse> {
+export async function startScan(mode: string = 'domainsdb', barkKey?: string): Promise<ScanResponse> {
   console.log('🚀 API: Starting scan...', { mode, barkKey });
   
   const url = `${API_BASE_URL}/api/v1/scan?mode=${mode}`;
@@ -106,7 +106,6 @@ export async function testNotification(barkKey: string): Promise<{ status: strin
   return response.json();
 }
 
-// 🆕 删除单个域名
 export async function deleteDomain(domainId: number): Promise<{ status: string; message: string }> {
   const response = await fetch(`${API_BASE_URL}/api/v1/domains/${domainId}`, {
     method: 'DELETE',
@@ -122,9 +121,9 @@ export async function deleteDomain(domainId: number): Promise<{ status: string; 
   return response.json();
 }
 
-// 🆕 清空所有域名
+// 🔧 修改路径为 /domains/all
 export async function clearAllDomains(): Promise<{ status: string; message: string }> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/domains/clear-all`, {
+  const response = await fetch(`${API_BASE_URL}/api/v1/domains/all`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
