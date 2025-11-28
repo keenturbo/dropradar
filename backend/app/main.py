@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.api.v1 import endpoints
+from app.core.database import init_db
 
 # Port configuration for Railway
 PORT = int(os.getenv("PORT", 8000))
@@ -10,10 +11,23 @@ PORT = int(os.getenv("PORT", 8000))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize database tables only when first accessed
-    # This prevents blocking during Railway deployment
+    """
+    Startup and shutdown events
+    """
+    # Startup: Initialize database tables
+    print("🚀 Starting DropRadar API...")
+    print("📊 Initializing database tables...")
+    try:
+        init_db()
+        print("✅ Database initialized successfully!")
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+        raise
+    
     yield
+    
     # Shutdown: cleanup if needed
+    print("👋 Shutting down DropRadar API...")
 
 
 app = FastAPI(
