@@ -15,6 +15,7 @@ OPENPAGERANK_API_KEY = os.getenv("OPENPAGERANK_API_KEY", "w00wkkkwo4c4sws4swggks
 DOMAINSDB_API_KEY = os.getenv("DOMAINSDB_API_KEY", "7f783667-ba54-4954-94fa-760d83765a85")
 EXPIREDDOMAINS_USERNAME = os.getenv("EXPIREDDOMAINS_USERNAME", "turboexpireddomains")
 EXPIREDDOMAINS_PASSWORD = os.getenv("EXPIREDDOMAINS_PASSWORD", "zeBtu2-kigsij-teqmab")
+EXPIREDDOMAINS_COOKIE = os.getenv("EXPIREDDOMAINS_COOKIE", "")  # 🆕 Cookie 登录
 
 def get_open_pagerank(domain: str) -> int:
     """获取真实的域名权重 - Open PageRank API"""
@@ -97,11 +98,7 @@ def fetch_from_domainsdb(keywords: List[str] = None) -> List[Dict]:
 
 
 def fetch_from_expireddomains() -> List[Dict]:
-    """方案 2: 从 ExpiredDomains.net 爬取（需要登录）- 最终修复版"""
-    
-    if not EXPIREDDOMAINS_PASSWORD or EXPIREDDOMAINS_PASSWORD == "YOUR_PASSWORD_HERE":
-        print("⚠️ ExpiredDomains 密码未配置，跳过该数据源")
-        return []
+    """方案 2: 从 ExpiredDomains.net 爬取 - Cookie 优先，密码登录备用"""
     
     chrome_options = Options()
     chrome_options.add_argument('--headless')
@@ -115,6 +112,7 @@ def fetch_from_expireddomains() -> List[Dict]:
     
     driver = None
     domains = []
+    login_success = False
     
     try:
         driver = webdriver.Chrome(options=chrome_options)
@@ -126,71 +124,123 @@ def fetch_from_expireddomains() -> List[Dict]:
             '''
         })
         
-        print("🔐 正在登录 ExpiredDomains.net...")
-        driver.get('https://www.expireddomains.net/login/')
-        time.sleep(3)
-        
-        page_source = driver.page_source
-        print(f"📄 页面标题: {driver.title}")
-        print(f"📍 当前 URL: {driver.current_url}")
-        
-        if 'name="login"' in page_source:
-            print("✅ 找到 login 字段")
-        else:
-            print("❌ 页面中没有 name='login' 字段")
-            return []
-        
-        print("⏳ 等待登录表单加载...")
-        wait = WebDriverWait(driver, 20)
-        
-        username_field = wait.until(EC.presence_of_element_located((By.NAME, 'login')))
-        password_field = driver.find_element(By.NAME, 'password')
-        
-        username_field.clear()
-        password_field.clear()
-        username_field.send_keys(EXPIREDDOMAINS_USERNAME)
-        password_field.send_keys(EXPIREDDOMAINS_PASSWORD)
-        
-        print(f"✅ 已填写账号: {EXPIREDDOMAINS_USERNAME}")
-        
-        # 🆕 智能查找登录按钮
-        login_button = None
-        try:
-            login_button = driver.find_element(By.NAME, 'submit')
-            print("✅ 找到按钮: name='submit'")
-        except:
+        # ========== 方式 1: Cookie 登录（优先）==========
+        if EXPIREDDOMAINS_COOKIE:
+            print("🍪 尝试使用 Cookie 登录...")
+            
             try:
-                login_button = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
-                print("✅ 找到按钮: button[type='submit']")
+                # 1. 先访问首页，建立 session
+                driver.get('https://www.expireddomains.net/')
+                time.sleep(2)
+                
+                # 2. 注入 Cookie
+                cookies = EXPIREDDOMAINS_COOKIE.split(';')
+                for cookie in cookies:
+                    if '=' in cookie:
+                        name, value = cookie.strip().split('=', 1)
+                        try:
+                            driver.add_cookie({
+                                'name': name,
+                                'value': value,
+                                'domain': '.expireddomains.net'
+                            })
+                        except Exception as e:
+                            print(f"⚠️ Cookie 注入失败: {name} - {e}")
+                
+                print("✅ Cookie 已注入")
+                
+                # 3. 直接访问会员页面验证
+                driver.get('https://member.expireddomains.net/')
+                time.sleep(3)
+                
+                # 检查是否登录成功
+                if 'login' not in driver.current_url.lower() and 'member.expireddomains.net' in driver.current_url:
+                    print("✅ Cookie 登录成功！")
+                    login_success = True
+                else:
+                    print("⚠️ Cookie 已失效，尝试密码登录...")
+                    
+            except Exception as e:
+                print(f"❌ Cookie 登录失败: {e}")
+        
+        # ========== 方式 2: 密码登录（备用）==========
+        if not login_success:
+            if not EXPIREDDOMAINS_PASSWORD or EXPIREDDOMAINS_PASSWORD == "YOUR_PASSWORD_HERE":
+                print("⚠️ ExpiredDomains 密码未配置，跳过该数据源")
+                return []
+            
+            print("🔐 使用密码登录 ExpiredDomains.net...")
+            driver.get('https://www.expireddomains.net/login/')
+            time.sleep(3)
+            
+            page_source = driver.page_source
+            print(f"📄 页面标题: {driver.title}")
+            print(f"📍 当前 URL: {driver.current_url}")
+            
+            if 'name="login"' not in page_source:
+                print("❌ 页面中没有 name='login' 字段")
+                return []
+            
+            print("⏳ 等待登录表单加载...")
+            wait = WebDriverWait(driver, 20)
+            
+            username_field = wait.until(EC.presence_of_element_located((By.NAME, 'login')))
+            password_field = driver.find_element(By.NAME, 'password')
+            
+            username_field.clear()
+            password_field.clear()
+            username_field.send_keys(EXPIREDDOMAINS_USERNAME)
+            password_field.send_keys(EXPIREDDOMAINS_PASSWORD)
+            
+            print(f"✅ 已填写账号: {EXPIREDDOMAINS_USERNAME}")
+            
+            # 智能查找登录按钮
+            login_button = None
+            try:
+                login_button = driver.find_element(By.NAME, 'submit')
+                print("✅ 找到按钮: name='submit'")
             except:
                 try:
-                    login_button = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"]')
-                    print("✅ 找到按钮: input[type='submit']")
+                    login_button = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
+                    print("✅ 找到按钮: button[type='submit']")
                 except:
                     try:
-                        login_button = driver.find_element(By.XPATH, '//button[contains(text(), "Login") or contains(text(), "Sign in")]')
-                        print("✅ 找到按钮: 包含 Login 文本")
+                        login_button = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"]')
+                        print("✅ 找到按钮: input[type='submit']")
                     except:
-                        print("❌ 无法找到登录按钮")
-                        return []
+                        try:
+                            login_button = driver.find_element(By.XPATH, '//button[contains(text(), "Login") or contains(text(), "Sign in")]')
+                            print("✅ 找到按钮: 包含 Login 文本")
+                        except:
+                            print("❌ 无法找到登录按钮")
+                            return []
+            
+            login_button.click()
+            print("⏳ 等待登录完成...")
+            time.sleep(5)
+            
+            current_url = driver.current_url
+            print(f"📍 登录后 URL: {current_url}")
+            
+            if 'login' in current_url.lower():
+                print("❌ 密码登录失败（可能需要验证码），请配置 Cookie 登录")
+                print("💡 提示：手动登录一次，然后复制浏览器 Cookie 到环境变量 EXPIREDDOMAINS_COOKIE")
+                return []
+            
+            print("✅ 密码登录成功！")
+            login_success = True
         
-        login_button.click()
-        print("⏳ 等待登录完成...")
-        time.sleep(5)
-        
-        current_url = driver.current_url
-        print(f"📍 登录后 URL: {current_url}")
-        
-        if 'login' in current_url.lower():
-            print("❌ 登录失败，仍在登录页面")
+        # ========== 登录成功后，获取域名数据 ==========
+        if not login_success:
             return []
         
-        print("✅ 登录成功，正在获取域名列表...")
+        print("📊 正在获取域名列表...")
         
         search_url = 'https://member.expireddomains.net/domains/expireddomains/?start=1&ftlds[]=2&ftlds[]=3&fmoza=10&fdomainpop=10&flastup=30'
         driver.get(search_url)
         
         print("⏳ 等待域名表格加载...")
+        wait = WebDriverWait(driver, 20)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'table.base1')))
         time.sleep(3)
         
