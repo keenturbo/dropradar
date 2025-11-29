@@ -1,24 +1,24 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "postgresql://dropradar:dropradar_secret@localhost:5432/dropradar"
+    database_url: str = "postgresql://user:password@localhost/dropradar"
     
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # API Keys & External Services
+    openpagerank_api_key: str = "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84"
+    expireddomains_cookie: str = ""
+    proxy_url: str = ""
     
-    # API Keys (will be configured later)
-    MOZ_API_KEY: Optional[str] = None
-    BARK_API_KEY: Optional[str] = None
+    # App Config
+    debug: bool = False
+    app_name: str = "DropRadar"
     
-    # Application
-    DEBUG: bool = True
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = ConfigDict(
+        env_file=".env",
+        extra="ignore"  # 🔥 关键：允许忽略额外的环境变量
+    )
 
 
 settings = Settings()
