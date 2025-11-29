@@ -1,267 +1,295 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import List
 
-from app.core.database import get_db
-from app.models.domain import Domain, DomainStatus
-from app.services.scanner import DomainScanner
-from app.services.notification import notify_bark
+from database import get_db
+from models.domain import Domain
+from schemas.domain import DomainResponse, DomainCreate, DomainUpdate
+from services.scanner import DomainScanner
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["domains"],
+)
 
 
-@router.get("/domains")
-def get_domains(
+@router.get("/domains", response_model=List[DomainResponse])
+def get_all_domains(
     skip: int = 0,
     limit: int = 100,
-    min_da: Optional[int] = None,
-    max_spam: Optional[int] = None,
-    status: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """获取域名列表，支持过滤"""
-    try:
-        query = db.query(Domain)
-        
-        if min_da:
-            query = query.filter(Domain.da_score >= min_da)
-        if max_spam:
-            query = query.filter(Domain.spam_score <= max_spam)
-        if status:
-            query = query.filter(Domain.status == status)
-        
-        domains = query.order_by(Domain.da_score.desc()).offset(skip).limit(limit).all()
-        total = query.count()
-        
-        return {
-            "domains": domains,
-            "total": total,
-            "skip": skip,
-            "limit": limit
-        }
-    except Exception as e:
-        print(f"Error fetching domains: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """获取所有域名列表（分页）"""
+    domains = db.query(Domain).offset(skip).limit(limit).all()
+    return domains
 
 
-@router.post("/scan")
-def start_scan(
-    mode: str = 'expireddomains',
-    bark_key: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """
-    触发域名扫描任务
+@router.get("/domains/top5", response_model=List[DomainResponse])
+def get_top5_domains(db: Session = Depends(get_db)):
+    """获取质量最高的 Top 5 域名"""
+    domains = db.query(Domain).order_by(
+        Domain.quality_score.desc()
+    ).limit(5).all()
     
-    mode 参数:
-    - 'mock': 模拟数据（快速测试）
-    - 'domainsdb': DomainDB + OpenPageRank（推荐，免费）
-    - 'expireddomains': ExpiredDomains.net（需配置密码）
-    - 'mixed': 混合两种数据源（最全面）
+    if not domains:
+        raise HTTPException(status_code=404, detail="No domains found")
+    
+    return domains
+
+
+@router.get("/domains/{domain_name}", response_model=DomainResponse)
+def get_domain_by_name(domain_name: str, db: Session = Depends(get_db)):
+    """获取特定域名详情"""
+    domain = db.query(Domain).filter(Domain.name == domain_name).first()
+    
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    
+    return domain
+
+
+@router.post("/domains", response_model=DomainResponse)
+def create_domain(domain: DomainCreate, db: Session = Depends(get_db)):
+    """手动创建单个域名记录"""
+    
+    # 检查是否已存在
+    existing = db.query(Domain).filter(Domain.name == domain.name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Domain already exists")
+    
+    db_domain = Domain(**domain.dict())
+    db.add(db_domain)
+    db.commit()
+    db.refresh(db_domain)
+    
+    return db_domain
+
+
+@router.put("/domains/{domain_name}", response_model=DomainResponse)
+def update_domain(
+    domain_name: str,
+    domain_update: DomainUpdate,
+    db: Session = Depends(get_db)
+):
+    """更新域名信息"""
+    
+    db_domain = db.query(Domain).filter(Domain.name == domain_name).first()
+    
+    if not db_domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    
+    update_data = domain_update.dict(exclude_unset=True)
+    update_data['updated_at'] = datetime.now()
+    
+    for key, value in update_data.items():
+        setattr(db_domain, key, value)
+    
+    db.commit()
+    db.refresh(db_domain)
+    
+    return db_domain
+
+
+@router.delete("/domains/{domain_name}")
+def delete_domain(domain_name: str, db: Session = Depends(get_db)):
+    """删除域名记录"""
+    
+    db_domain = db.query(Domain).filter(Domain.name == domain_name).first()
+    
+    if not db_domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    
+    db.delete(db_domain)
+    db.commit()
+    
+    return {"message": f"Domain {domain_name} deleted successfully"}
+
+
+@router.post("/scan-top5")
+def scan_and_save_top5(db: Session = Depends(get_db)):
     """
-    try:
-        print(f"🔍 Starting scan with mode: {mode}")
+    执行扫描：抓取 4 页（100 个域名），计算质量分数，保存 Top 5 到数据库
+    
+    流程：
+    1. 从 ExpiredDomains.net 抓取 4 页（100 个域名）
+    2. 批量获取 DA 分数
+    3. 计算综合质量分数
+    4. 返回 Top 5，保存到数据库
+    """
+    
+    print("\n" + "="*80)
+    print("🚀 开始执行域名扫描任务...")
+    print("="*80 + "\n")
+    
+    scanner = DomainScanner(mode='expireddomains')
+    top_domains = scanner.scan()  # 返回 Top 5
+    
+    if not top_domains:
+        raise HTTPException(status_code=500, detail="Scan failed, no domains found")
+    
+    # 保存到数据库
+    saved_domains = []
+    
+    for domain_data in top_domains:
+        domain_name = domain_data['name']
         
-        scanner = DomainScanner(mode=mode)
-        found_domains = scanner.scan()
+        # 检查是否已存在
+        existing = db.query(Domain).filter(Domain.name == domain_name).first()
         
-        print(f"📦 Scanner returned {len(found_domains)} domains")
-        
-        new_count = 0
-        high_value_domains = []
-        
-        for domain_data in found_domains:
-            existing = db.query(Domain).filter(Domain.name == domain_data['name']).first()
-            if existing:
-                print(f"⏭️ Domain {domain_data['name']} already exists, skipping")
-                continue
+        if existing:
+            # 更新现有记录
+            existing.da_score = domain_data['da_score']
+            existing.backlinks = domain_data['backlinks']
+            existing.referring_domains = domain_data['referring_domains']
+            existing.quality_score = domain_data['quality_score']
+            existing.price = domain_data['price']
+            existing.bids = domain_data['bids']
+            existing.wikipedia_links = domain_data['wikipedia_links']
+            existing.domain_age = domain_data['domain_age']
+            existing.spam_score = domain_data['spam_score']
+            existing.last_seen = datetime.now()
+            existing.updated_at = datetime.now()
+            existing.is_new = False
             
-            domain = Domain(
-                name=domain_data['name'],
+            print(f"🔄 更新已存在的域名: {domain_name}")
+            
+        else:
+            # 创建新记录
+            db_domain = Domain(
+                name=domain_name,
                 da_score=domain_data['da_score'],
                 backlinks=domain_data['backlinks'],
+                referring_domains=domain_data['referring_domains'],
                 spam_score=domain_data['spam_score'],
-                status=DomainStatus.AVAILABLE,
+                status='available',
                 drop_date=domain_data['drop_date'],
                 tld=domain_data['tld'],
-                length=domain_data['length']
+                length=domain_data['length'],
+                domain_age=domain_data['domain_age'],
+                price=domain_data['price'],
+                bids=domain_data['bids'],
+                wikipedia_links=domain_data['wikipedia_links'],
+                quality_score=domain_data['quality_score'],
+                is_new=True,
+                notified=False
             )
+            db.add(db_domain)
             
-            db.add(domain)
-            new_count += 1
-            
-            if domain_data['da_score'] >= 40 and domain_data['spam_score'] < 10:
-                high_value_domains.append(domain_data)
-        
-        db.commit()
-        
-        if bark_key and high_value_domains:
-            try:
-                for domain_data in high_value_domains[:3]:
-                    notify_bark(
-                        bark_key=bark_key,
-                        title="🚨 高价值域名发现",
-                        content=f"{domain_data['name']} | DA:{domain_data['da_score']} | Spam:{domain_data['spam_score']}%",
-                        url=f"https://www.namecheap.com/domains/registration/results/?domain={domain_data['name']}"
-                    )
-            except Exception as notify_error:
-                print(f"⚠️ Bark notification failed: {notify_error}")
-        
-        print(f"✅ Scan completed. Added {new_count} new domains to database.")
-        
-        return {
-            "status": "success",
-            "domains_found": new_count,
-            "message": f"扫描完成，发现 {new_count} 个新域名（模式：{mode}）"
-        }
-        
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Scan failed: {e}")
-        raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
+            print(f"✨ 保存新域名: {domain_name}")
+    
+    db.commit()
+    
+    # 刷新数据获取最新状态
+    top5_from_db = db.query(Domain).order_by(
+        Domain.quality_score.desc()
+    ).limit(5).all()
+    
+    print("\n" + "="*80)
+    print("✅ 扫描完成，已保存 Top 5 到数据库")
+    print("="*80 + "\n")
+    
+    return {
+        "status": "success",
+        "message": "Scan completed and Top 5 domains saved to database",
+        "total_scanned": 100,
+        "top_domains_saved": len(top_domains),
+        "top_5_domains": [
+            {
+                "name": d.name,
+                "quality_score": d.quality_score,
+                "da_score": d.da_score,
+                "backlinks": d.backlinks,
+                "referring_domains": d.referring_domains,
+                "price": d.price,
+                "bids": d.bids,
+                "domain_age": d.domain_age,
+                "wikipedia_links": d.wikipedia_links,
+                "is_new": d.is_new,
+                "created_at": d.created_at.isoformat()
+            }
+            for d in top5_from_db
+        ]
+    }
 
 
 @router.get("/stats")
-def get_stats(db: Session = Depends(get_db)):
-    """获取统计数据"""
-    try:
-        total = db.query(Domain).count()
-        
-        avg_da_result = db.query(func.avg(Domain.da_score)).scalar()
-        avg_da = round(float(avg_da_result), 1) if avg_da_result else 0.0
-        
-        available = db.query(Domain).filter(Domain.status == DomainStatus.AVAILABLE).count()
-        low_spam = db.query(Domain).filter(Domain.spam_score < 10).count()
-        
-        return {
-            "total": total,
-            "avg_da": avg_da,
-            "available": available,
-            "low_spam": low_spam
-        }
-    except Exception as e:
-        print(f"Error fetching stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+def get_domain_stats(db: Session = Depends(get_db)):
+    """获取域名统计数据"""
+    
+    total = db.query(Domain).count()
+    new_domains = db.query(Domain).filter(Domain.is_new == True).count()
+    notified = db.query(Domain).filter(Domain.notified == True).count()
+    
+    # 平均质量分数
+    avg_quality = db.query(Domain).with_entities(
+        db.func.avg(Domain.quality_score)
+    ).scalar() or 0
+    
+    # 平均 DA 分数
+    avg_da = db.query(Domain).with_entities(
+        db.func.avg(Domain.da_score)
+    ).scalar() or 0
+    
+    # 平均价格
+    avg_price = db.query(Domain).with_entities(
+        db.func.avg(Domain.price)
+    ).scalar() or 0
+    
+    return {
+        "total_domains": total,
+        "new_domains": new_domains,
+        "notified_domains": notified,
+        "avg_quality_score": round(avg_quality, 2),
+        "avg_da_score": round(avg_da, 2),
+        "avg_price": round(avg_price, 2)
+    }
 
 
-@router.post("/test-notification")
-def test_notification(request: dict):
-    """测试 Bark 通知"""
-    try:
-        bark_key = request.get("bark_key")
-        if not bark_key:
-            raise HTTPException(status_code=400, detail="bark_key is required")
-        
-        notify_bark(
-            bark_key=bark_key,
-            title="🔔 DropRadar 测试通知",
-            content="Bark 通知系统工作正常！",
-            url="https://github.com/keenturbo/dropradar"
-        )
-        
-        return {"status": "success", "message": "通知已发送"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# 🆕 到期检查功能
-@router.get("/check-expiring")
-def check_expiring_domains(
-    bark_key: Optional[str] = None,
+@router.get("/domains/filter/by-quality")
+def filter_domains_by_quality(
+    min_score: float = 50.0,
+    max_score: float = 100.0,
+    limit: int = 20,
     db: Session = Depends(get_db)
 ):
-    """检查即将到期的域名（今天和明天）"""
-    try:
-        today = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
-        
-        print(f"🔍 Checking for domains expiring on {today} or {tomorrow}")
-        
-        expiring_soon = db.query(Domain).filter(
-            (Domain.drop_date == today) | (Domain.drop_date == tomorrow)
-        ).all()
-        
-        print(f"📦 Found {len(expiring_soon)} expiring domains")
-        
-        if bark_key and expiring_soon:
-            print("📲 Sending Bark notifications...")
-            for domain in expiring_soon[:5]:  # 最多通知 5 个
-                days_left = (domain.drop_date - today).days
-                
-                if days_left == 0:
-                    title = "🚨 域名今天到期"
-                elif days_left == 1:
-                    title = "⏰ 域名明天到期"
-                else:
-                    title = f"⏰ 域名 {days_left} 天后到期"
-                
-                notify_bark(
-                    bark_key=bark_key,
-                    title=title,
-                    content=f"{domain.name} | DA:{domain.da_score} | Spam:{domain.spam_score}%",
-                    url=f"https://www.namecheap.com/domains/registration/results/?domain={domain.name}"
-                )
-                print(f"✅ Notified: {domain.name} (expires in {days_left} days)")
-        
-        return {
-            "status": "success",
-            "expiring_count": len(expiring_soon),
-            "domains": [
-                {
-                    "name": d.name,
-                    "drop_date": d.drop_date.isoformat(),
-                    "da_score": d.da_score,
-                    "days_left": (d.drop_date - today).days
-                }
-                for d in expiring_soon
-            ]
-        }
-    except Exception as e:
-        print(f"❌ Check expiring failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """按质量分数范围筛选域名"""
+    
+    domains = db.query(Domain).filter(
+        Domain.quality_score >= min_score,
+        Domain.quality_score <= max_score
+    ).order_by(Domain.quality_score.desc()).limit(limit).all()
+    
+    return domains
 
 
-# 删除功能
-@router.delete("/domains/all")
-def clear_all_domains(db: Session = Depends(get_db)):
-    """清空所有域名"""
-    try:
-        count = db.query(Domain).count()
-        db.query(Domain).delete()
-        db.commit()
-        
-        print(f"🗑️ Cleared all {count} domains from database")
-        
-        return {"status": "success", "message": f"已清空 {count} 个域名"}
-        
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Clear all failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/domains/filter/by-da")
+def filter_domains_by_da(
+    min_da: int = 10,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """按 DA 分数筛选域名"""
+    
+    domains = db.query(Domain).filter(
+        Domain.da_score >= min_da
+    ).order_by(Domain.da_score.desc()).limit(limit).all()
+    
+    return domains
 
 
-@router.delete("/domains/{domain_id}")
-def delete_domain(domain_id: int, db: Session = Depends(get_db)):
-    """删除指定域名"""
-    try:
-        domain = db.query(Domain).filter(Domain.id == domain_id).first()
-        
-        if not domain:
-            raise HTTPException(status_code=404, detail="域名不存在")
-        
-        domain_name = domain.name
-        db.delete(domain)
-        db.commit()
-        
-        print(f"🗑️ Deleted domain: {domain_name} (ID: {domain_id})")
-        
-        return {"status": "success", "message": f"已删除域名: {domain_name}"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Delete failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/domains/filter/by-price")
+def filter_domains_by_price(
+    min_price: int = 0,
+    max_price: int = 5000,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """按价格范围筛选域名"""
+    
+    domains = db.query(Domain).filter(
+        Domain.price >= min_price,
+        Domain.price <= max_price
+    ).order_by(Domain.quality_score.desc()).limit(limit).all()
+    
+    return domains
