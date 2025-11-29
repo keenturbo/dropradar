@@ -82,7 +82,7 @@ WORD_POOL = [
     # AI/科技类
     'ai', 'cloud', 'neural', 'deep', 'bot', 'auto', 'smart', 'quantum',
     'cyber', 'data', 'algo', 'crypto', 'meta', 'chain', 'edge', 'sync',
-    'neural', 'tensor', 'vector', 'matrix',
+    'tensor', 'vector', 'matrix',
     
     # 动作类
     'build', 'forge', 'craft', 'make', 'grow', 'scale', 'flow', 'link',
@@ -268,7 +268,6 @@ def _parse_ai_domains(domain_lines: List[str]) -> List[Dict]:
     return domains
 
 
-# ============= 原有函数保持不变 =============
 def extract_number(text: str) -> int:
     """正则提取数字，处理 1.8K、1,992 等格式"""
     if not text:
@@ -507,15 +506,14 @@ def fetch_from_expireddomains() -> List[Dict]:
     return asyncio.run(fetch_expireddomains_multi_pages(pages=4))
 
 
-# ============= 修改：主扫描器类（三层降级） =============
 class DomainScanner:
     """域名扫描器主类"""
     
     def __init__(self, mode='expireddomains'):
         self.mode = mode
     
-    def scan(self) -> List[Dict]:
-        """三层降级扫描"""
+    def scan(self) -> Dict[str, List[Dict]]:
+        """三层降级扫描，返回 {all_domains: [...], top_5: [...]}"""
         
         print("\n" + "="*80)
         print("🚀 开始三层降级扫描...")
@@ -523,69 +521,37 @@ class DomainScanner:
         
         domains = []
         
-        # ===== A 层：真实爬虫 + WHOIS 验证 =====
+        # ===== A 层：真实爬虫（不验证）=====
         if self.mode == 'expireddomains':
             print("🕷️ [A 层] 抓取 ExpiredDomains.net（4 页 = 100 个域名）")
             raw_domains = fetch_from_expireddomains()
             
             if raw_domains:
-                print(f"\n🔍 开始 WHOIS 验证（共 {len(raw_domains)} 个域名）...\n")
-                
-                verified_domains = []
-                
-                for idx, domain_data in enumerate(raw_domains, 1):
-                    domain_name = domain_data['name']
-                    
-                    print(f"  [{idx}/{len(raw_domains)}] 验证 {domain_name}...")
-                    
-                    whois_result = verify_expiry_date_via_whois(domain_name)
-                    
-                    if whois_result['error']:
-                        print(f"    ⚠️ WHOIS 查询失败: {whois_result['error']}")
-                        continue
-                    
-                    if not whois_result['is_expired']:
-                        real_expiry = whois_result['real_expiry']
-                        print(f"    ❌ 已续费：真实到期日期 {real_expiry.strftime('%Y-%m-%d')}")
-                        continue
-                    
-                    if whois_result['is_available']:
-                        print(f"    ✅ 真正过期可注册")
-                        domain_data['drop_date'] = whois_result['real_expiry'].date()
-                        verified_domains.append(domain_data)
-                    else:
-                        print(f"    ⏳ 在宽限期内")
-                
-                domains.extend(verified_domains)
-                print(f"\n✅ [A 层] 验证后剩余 {len(verified_domains)} 个真正过期的域名\n")
-            
+                print(f"\n✅ [A 层] 抓取到 {len(raw_domains)} 个域名\n")
+                domains.extend(raw_domains)
             else:
                 print("❌ [A 层] 爬虫失败，进入降级模式\n")
         
-        # ===== B 层：Mock 组合域名（降级） =====
+        # ===== B 层：Mock 组合域名（降级）=====
         if len(domains) < 5:
             print("🔄 [B 层] 生成组合域名（降级兜底）")
             mock_domains = generate_mock_domains(count=20)
             domains.extend(mock_domains)
             print(f"✅ [B 层] 生成 {len(mock_domains)} 个组合域名\n")
         
-        # ===== C 层：AI 生成（可选） =====
+        # ===== C 层：AI 生成（可选）=====
         if len(domains) < 5 and (settings.anthropic_api_key or settings.google_api_key):
             print("🤖 [C 层] AI 生成高质量域名（最终兜底）")
             ai_domains = generate_ai_domains(topic="SaaS and AI tools", count=20)
             domains.extend(ai_domains)
             print(f"✅ [C 层] AI 生成 {len(ai_domains)} 个域名\n")
         
-        # ===== 计算质量分数 + 返回 Top 5 =====
+        # ===== 计算质量分数 =====
         if not domains:
             print("❌ 三层扫描全部失败")
-            return []
+            return {"all_domains": [], "top_5": []}
         
         print(f"🔍 开始计算质量分数（共 {len(domains)} 个域名）...\n")
-        return self._filter_high_quality(domains)
-    
-    def _filter_high_quality(self, domains: List[Dict]) -> List[Dict]:
-        """计算质量分数，返回 Top 5"""
         
         for domain in domains:
             score = 0
@@ -614,11 +580,43 @@ class DomainScanner:
         
         domains.sort(key=lambda x: x.get('quality_score', 0), reverse=True)
         
+        top_5 = domains[:5]
+        
+        # ===== WHOIS 验证 Top 5 =====
+        print(f"\n🔍 对 Top 5 进行 WHOIS 验证...\n")
+        
+        verified_top_5 = []
+        for idx, domain_data in enumerate(top_5, 1):
+            domain_name = domain_data['name']
+            
+            print(f"  [{idx}/5] 验证 {domain_name}...")
+            
+            whois_result = verify_expiry_date_via_whois(domain_name)
+            
+            if whois_result['error']:
+                print(f"    ⚠️ WHOIS 查询失败: {whois_result['error']}，保留该域名")
+                verified_top_5.append(domain_data)
+                continue
+            
+            if not whois_result['is_expired']:
+                if whois_result['real_expiry']:
+                    real_expiry = whois_result['real_expiry']
+                    print(f"    ❌ 已续费：真实到期日期 {real_expiry.strftime('%Y-%m-%d')}")
+                    continue
+                else:
+                    print(f"    ⚠️ 无法获取到期日期，保留该域名")
+                    verified_top_5.append(domain_data)
+                    continue
+            
+            print(f"    ✅ 确认可注册")
+            domain_data['drop_date'] = whois_result['real_expiry'].date()
+            verified_top_5.append(domain_data)
+        
         print(f"\n{'='*80}")
         print(f"🏆 TOP 5 高质量过期域名（共评估 {len(domains)} 个）")
         print(f"{'='*80}\n")
         
-        for idx, d in enumerate(domains[:5], 1):
+        for idx, d in enumerate(verified_top_5, 1):
             print(f"{idx}. 【{d['name']}】")
             print(f"   📊 质量分: {d.get('quality_score', 0):.1f}/100")
             print(f"   🔗 DA: {d.get('da_score', 0)} | 外链: {d.get('backlinks', 0):,} | 引用域: {d.get('referring_domains', 0)}")
@@ -626,5 +624,10 @@ class DomainScanner:
             print()
         
         print(f"{'='*80}\n")
+        print(f"✅ 最终返回 {len(verified_top_5)} 个验证通过的域名")
+        print(f"✅ 全部域名 {len(domains)} 个将存入数据库\n")
         
-        return domains[:5]
+        return {
+            "all_domains": domains,
+            "top_5": verified_top_5
+        }
