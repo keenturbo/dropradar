@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.database import init_db
+from app.database import init_db, Base, engine
 from app.api.v1 import endpoints
 
 app = FastAPI(title="DropRadar", version="1.0.0")
@@ -14,7 +14,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 初始化数据库
+# 初始化数据库 - 重建表（删除旧表+创建新表）
+Base.metadata.drop_all(bind=engine)
 init_db()
 
 # 路由
