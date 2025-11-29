@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime
 from typing import List
@@ -222,19 +223,13 @@ def get_domain_stats(db: Session = Depends(get_db)):
     notified = db.query(Domain).filter(Domain.notified == True).count()
     
     # 平均质量分数
-    avg_quality = db.query(Domain).with_entities(
-        db.func.avg(Domain.quality_score)
-    ).scalar() or 0
+    avg_quality = db.query(func.avg(Domain.quality_score)).scalar() or 0
     
     # 平均 DA 分数
-    avg_da = db.query(Domain).with_entities(
-        db.func.avg(Domain.da_score)
-    ).scalar() or 0
+    avg_da = db.query(func.avg(Domain.da_score)).scalar() or 0
     
     # 平均价格
-    avg_price = db.query(Domain).with_entities(
-        db.func.avg(Domain.price)
-    ).scalar() or 0
+    avg_price = db.query(func.avg(Domain.price)).scalar() or 0
     
     return {
         "total_domains": total,
