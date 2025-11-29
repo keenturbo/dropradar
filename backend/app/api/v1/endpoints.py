@@ -15,7 +15,7 @@ router = APIRouter(
 )
 
 
-@router.get("/domains", response_model=List[DomainResponse])
+@router.get("/domains")
 def get_all_domains(
     skip: int = 0,
     limit: int = 100,
@@ -23,7 +23,12 @@ def get_all_domains(
 ):
     """获取所有域名列表（分页）"""
     domains = db.query(Domain).offset(skip).limit(limit).all()
-    return domains
+    return {
+        "domains": domains,
+        "total": db.query(Domain).count(),
+        "skip": skip,
+        "limit": limit
+    }
 
 
 @router.get("/domains/top5", response_model=List[DomainResponse])
@@ -92,11 +97,11 @@ def update_domain(
     return db_domain
 
 
-@router.delete("/domains/{domain_name}")
-def delete_domain(domain_name: str, db: Session = Depends(get_db)):
+@router.delete("/domains/{domain_id}")
+def delete_domain(domain_id: int, db: Session = Depends(get_db)):
     """删除域名记录"""
     
-    db_domain = db.query(Domain).filter(Domain.name == domain_name).first()
+    db_domain = db.query(Domain).filter(Domain.id == domain_id).first()
     
     if not db_domain:
         raise HTTPException(status_code=404, detail="Domain not found")
@@ -104,7 +109,18 @@ def delete_domain(domain_name: str, db: Session = Depends(get_db)):
     db.delete(db_domain)
     db.commit()
     
-    return {"message": f"Domain {domain_name} deleted successfully"}
+    return {"message": f"Domain deleted successfully"}
+
+
+@router.delete("/domains/all")
+def clear_all_domains(db: Session = Depends(get_db)):
+    """清空所有域名"""
+    
+    count = db.query(Domain).count()
+    db.query(Domain).delete()
+    db.commit()
+    
+    return {"status": "success", "message": f"Deleted {count} domains"}
 
 
 @router.post("/scan")
@@ -193,7 +209,7 @@ def scan_domains(mode: str = Query("expireddomains"), db: Session = Depends(get_
     
     return {
         "status": "success",
-        "message": "Scan completed and Top 5 domains saved to database",
+        "message": "✅ Scan completed and Top 5 domains saved to database",
         "mode": mode,
         "total_scanned": 100,
         "top_domains_saved": len(top_domains),
@@ -299,7 +315,7 @@ def scan_and_save_top5(db: Session = Depends(get_db)):
     
     return {
         "status": "success",
-        "message": "Scan completed and Top 5 domains saved to database",
+        "message": "✅ Scan completed and Top 5 domains saved to database",
         "total_scanned": 100,
         "top_domains_saved": len(top_domains),
         "top_5_domains": [
@@ -339,12 +355,10 @@ def get_domain_stats(db: Session = Depends(get_db)):
     avg_price = db.query(func.avg(Domain.price)).scalar() or 0
     
     return {
-        "total_domains": total,
-        "new_domains": new_domains,
-        "notified_domains": notified,
-        "avg_quality_score": round(avg_quality, 2),
-        "avg_da_score": round(avg_da, 2),
-        "avg_price": round(avg_price, 2)
+        "total": total,
+        "avg_da": round(avg_da, 1),
+        "available": total,
+        "low_spam": db.query(Domain).filter(Domain.spam_score < 10).count()
     }
 
 
