@@ -14,22 +14,16 @@ logger = logging.getLogger(__name__)
 @router.get("/domains")
 def get_domains(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """获取域名列表（优先显示新域名）"""
-    # 🔥 优先返回新域名（is_new=True），然后按创建时间倒序
     domains = db.query(Domain)\
         .order_by(Domain.is_new.desc(), Domain.created_at.desc())\
         .offset(skip)\
         .limit(limit)\
         .all()
-    
-    logger.info(f"📊 GET /api/v1/domains 返回 {len(domains)} 个域名")
-    if domains:
-        logger.info(f"   第一个域名: {domains[0].name} (is_new={domains[0].is_new}, created_at={domains[0].created_at})")
     return domains
 
 
 @router.get("/domains/{domain_id}")
 def get_domain(domain_id: int, db: Session = Depends(get_db)):
-    """获取单个域名详情"""
     domain = db.query(Domain).filter(Domain.id == domain_id).first()
     if not domain:
         raise HTTPException(status_code=404, detail="域名不存在")
@@ -38,13 +32,10 @@ def get_domain(domain_id: int, db: Session = Depends(get_db)):
 
 @router.get("/stats")
 def get_stats(db: Session = Depends(get_db)):
-    """获取统计信息"""
     total_domains = db.query(Domain).count()
     new_domains = db.query(Domain).filter(Domain.is_new == True).count()
     avg_da = db.query(Domain).with_entities(Domain.da_score).all()
     avg_da_score = sum([d[0] for d in avg_da if d[0]]) / len(avg_da) if avg_da else 0
-    
-    logger.info(f"📊 统计: 总 {total_domains} 个，新增 {new_domains} 个，平均 DA {avg_da_score:.1f}")
     
     return {
         "total_domains": total_domains,
@@ -55,48 +46,32 @@ def get_stats(db: Session = Depends(get_db)):
 
 @router.post("/scan")
 async def scan_domains(mode: str = "expireddomains", db: Session = Depends(get_db)):
-    """扫描域名"""
+    """扫描域名 - 直接返回域名列表"""
     logger.info(f"🔍 开始扫描 (mode={mode})")
     scanner = DomainScanner(mode=mode)
-    result = await scanner.scan()  # 返回 {all_domains: [...], top_5: [...]}
+    result = await scanner.scan()
     
     all_domains = result.get("all_domains", [])
-    top_5 = result.get("top_5", [])
     
-    logger.info(f"📦 扫描返回 {len(all_domains)} 个域名")
-    
-    # 🔥 新增：准备返回给前端的域名列表
+    # 准备返回列表
     return_domains = []
-    
-    # 数据库保存（确保不重复）
-    new_count = 0
-    updated_count = 0
     
     for domain_data in all_domains:
         try:
-            # 检查是否已存在
+            # 查重
             existing = db.query(Domain).filter(Domain.name == domain_data['name']).first()
             
             if existing:
-                # 更新现有记录
+                # 更新
                 existing.da_score = domain_data.get('da_score', existing.da_score)
                 existing.backlinks = domain_data.get('backlinks', existing.backlinks)
                 existing.status = domain_data.get('status', existing.status)
                 existing.drop_date = domain_data.get('drop_date', existing.drop_date)
-                updated_count += 1
+                existing.is_new = True # 重新标记为新
                 
-                # 🔥 添加到返回列表（转换为字典）
-                return_domains.append({
-                    "id": existing.id,
-                    "name": existing.name,
-                    "da_score": existing.da_score,
-                    "backlinks": existing.backlinks,
-                    "status": existing.status,
-                    "drop_date": existing.drop_date.isoformat() if existing.drop_date else None,
-                    "created_at": existing.created_at.isoformat() if existing.created_at else None
-                })
+                return_domains.append(existing)
             else:
-                # 新增记录
+                # 新增
                 new_domain = Domain(
                     name=domain_data['name'],
                     tld=domain_data.get('tld', ''),
@@ -108,51 +83,25 @@ async def scan_domains(mode: str = "expireddomains", db: Session = Depends(get_d
                     is_new=True
                 )
                 db.add(new_domain)
-                db.flush()  # 🔥 立即获取 ID
-                new_count += 1
-                
-                # 🔥 添加到返回列表
-                return_domains.append({
-                    "id": new_domain.id,
-                    "name": new_domain.name,
-                    "da_score": new_domain.da_score,
-                    "backlinks": new_domain.backlinks,
-                    "status": new_domain.status,
-                    "drop_date": new_domain.drop_date.isoformat() if new_domain.drop_date else None,
-                    "created_at": new_domain.created_at.isoformat() if new_domain.created_at else None
-                })
+                db.flush()
+                return_domains.append(new_domain)
                 
         except Exception as e:
-            logger.error(f"保存域名 {domain_data.get('name')} 失败: {e}")
+            logger.error(f"保存失败: {e}")
             continue
     
     try:
+        # 标记其他旧域名为 is_new=False
+        db.query(Domain).filter(
+            Domain.is_new == True,
+            Domain.id.notin_([d.id for d in return_domains])
+        ).update({'is_new': False})
+        
         db.commit()
-        logger.info(f"✅ 数据库保存：新增 {new_count} 个域名，更新 {updated_count} 个")
+        logger.info(f"✅ 成功处理 {len(return_domains)} 个域名")
     except Exception as e:
         db.rollback()
         logger.error(f"数据库提交失败: {e}")
-        raise HTTPException(status_code=500, detail=f"数据库保存失败: {str(e)}")
     
-    # 🔥 标记旧域名为非新（is_new=False），这样新域名会优先显示）
-    try:
-        db.query(Domain).filter(
-            Domain.is_new == True,
-            Domain.id.notin_([d['id'] for d in return_domains])
-        ).update({'is_new': False})
-        db.commit()
-    except Exception as e:
-        logger.warning(f"更新旧域名状态失败: {e}")
-    
-    # 🔥 返回本次扫描到的域名列表（前端直接展示）
-    response = {
-        "message": f"扫描完成：新增 {new_count} 个域名，更新 {updated_count} 个域名",
-        "new_count": new_count,
-        "updated_count": updated_count,
-        "total": len(return_domains),
-        "domains": return_domains,  # 本次扫描的所有域名
-        "top_5": return_domains[:5]  # Top 5
-    }
-    
-    logger.info(f"📤 返回响应: {response['message']}")
-    return response
+    # 🔥🔥🔥 关键修改：直接返回列表，而不是字典！
+    return return_domains
