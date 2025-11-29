@@ -8,7 +8,6 @@ from curl_cffi.requests import AsyncSession
 import asyncio
 from bs4 import BeautifulSoup
 
-# ========== 配置 ==========
 OPENPAGERANK_API_KEY = os.getenv("OPENPAGERANK_API_KEY", "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84")
 DOMAINSDB_API_KEY = os.getenv("DOMAINSDB_API_KEY", "7f783667-ba54-4954-94fa-760d83765a85")
 EXPIREDDOMAINS_COOKIE = os.getenv("EXPIREDDOMAINS_COOKIE", "")
@@ -16,6 +15,23 @@ EXPIREDDOMAINS_COOKIE = os.getenv("EXPIREDDOMAINS_COOKIE", "")
 BROWSER_PROFILE = "chrome110"
 TIMEOUT = 30
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+
+def extract_number(text: str) -> int:
+    """正则提取数字，处理 1.8K、1,992 等格式"""
+    if not text:
+        return 0
+    
+    # 匹配 1.8K 或 1,992 或 14
+    match = re.search(r'(\d+(?:\.\d+)?)\s*K', text.upper())
+    if match:
+        return int(float(match.group(1)) * 1000)
+    
+    match = re.search(r'(\d[\d,]*)', text)
+    if match:
+        return int(match.group(1).replace(',', ''))
+    
+    return 0
+
 
 def get_open_pagerank(domain: str) -> int:
     """获取真实的域名权重 - Open PageRank API"""
@@ -38,33 +54,6 @@ def get_open_pagerank(domain: str) -> int:
         print(f"❌ OpenPageRank error for {domain}: {e}")
     
     return random.randint(20, 50)
-
-
-def parse_number(text: str) -> int:
-    """解析数字字符串，支持 1.8K、1,992 等格式"""
-    if not text:
-        return 0
-    
-    text = text.strip().upper()
-    
-    # 移除 USD、逗号等符号
-    text = text.replace('USD', '').replace(',', '').strip()
-    
-    # 处理 K 格式 (1.8K -> 1800)
-    if 'K' in text:
-        try:
-            num = float(text.replace('K', ''))
-            return int(num * 1000)
-        except:
-            return 0
-    
-    # 处理普通数字
-    try:
-        if '.' in text:
-            return int(float(text))
-        return int(text)
-    except:
-        return 0
 
 
 def fetch_from_domainsdb(keywords: List[str] = None) -> List[Dict]:
@@ -151,7 +140,7 @@ def get_dynamic_headers(referer: str = None) -> Dict[str, str]:
 
 
 async def fetch_expireddomains_async() -> List[Dict]:
-    """使用 curl_cffi 异步获取域名（修复版 - 精确列解析）"""
+    """使用 curl_cffi 异步获取域名（修复版 - 正则提取+正确列索引）"""
     
     cookie = os.getenv("EXPIREDDOMAINS_COOKIE", "")
     if not cookie:
@@ -205,31 +194,19 @@ async def fetch_expireddomains_async() -> List[Dict]:
                 print("💾 调试信息已保存到 /tmp/debug.html")
                 return []
             
-            # 🔥 调试：打印表头结构
-            thead = table.find('thead')
-            if thead:
-                headers_list = [th.text.strip() for th in thead.find_all('th')]
-                print(f"📋 表头结构 ({len(headers_list)} 列): {headers_list}")
-            
             tbody = table.find('tbody')
             if not tbody:
                 print("❌ 表格无 tbody")
                 return []
             
             rows = tbody.find_all('tr')
-            print(f"📦 找到 {len(rows)} 行数据")
+            print(f"📦 找到 {len(rows)} 行数据，开始提取...")
             
-            # 🔥 调试：打印前3行原始数据
-            for idx, row in enumerate(rows[:3]):
-                cols = row.find_all('td')
-                col_texts = [col.text.strip() for col in cols]
-                print(f"🔍 第{idx+1}行原始数据 ({len(cols)} 列): {col_texts}")
-            
-            # 🔥 核心修复：按列索引精确提取
-            for idx, row in enumerate(rows[:20]):
+            # 🔥 修复：抓取所有域名（不限20个），用于后续筛选
+            for idx, row in enumerate(rows):
                 try:
                     cols = row.find_all('td')
-                    if len(cols) < 16:  # 至少需要16列（到 Bids）
+                    if len(cols) < 22:  # 至少需要22列（到 Bids）
                         continue
                     
                     # 列0: Domain
@@ -241,27 +218,24 @@ async def fetch_expireddomains_async() -> List[Dict]:
                     if '.' not in domain_name:
                         continue
                     
-                    # 列2: BL (Backlinks) - 外链数量
-                    backlinks = parse_number(cols[2].text.strip())
+                    # 🔥 修正列索引：BL=列4, DP=列5, WBY=列6
+                    backlinks = extract_number(cols[4].text.strip())  # 列4: BL (正则提取)
+                    referring_domains = extract_number(cols[5].text.strip())  # 列5: DP
                     
-                    # 列3: DP (Domain Pop) - 引用域数量
-                    referring_domains = parse_number(cols[3].text.strip())
-                    
-                    # 列4: WBY (Whois Birth Year) - 域名注册年份
-                    wby_text = cols[4].text.strip()
+                    wby_text = cols[6].text.strip()  # 列6: WBY
                     try:
                         domain_age = int(wby_text) if wby_text.isdigit() else 0
                     except:
                         domain_age = 0
                     
-                    # 列13: WPL (Wikipedia Links) - 维基百科外链
-                    wikipedia_links = parse_number(cols[13].text.strip()) if len(cols) > 13 else 0
+                    # 列20: WPL (Wikipedia Links)
+                    wikipedia_links = extract_number(cols[20].text.strip()) if len(cols) > 20 else 0
                     
-                    # 列14: Price (价格)
-                    price = parse_number(cols[14].text.strip()) if len(cols) > 14 else 0
+                    # 列21: Price
+                    price = extract_number(cols[21].text.strip()) if len(cols) > 21 else 0
                     
-                    # 列15: Bids (出价次数)
-                    bids = parse_number(cols[15].text.strip()) if len(cols) > 15 else 0
+                    # 列22: Bids
+                    bids = extract_number(cols[22].text.strip()) if len(cols) > 22 else 0
                     
                     # 计算域名年龄
                     age_years = (datetime.now().year - domain_age) if domain_age > 1900 else 0
@@ -281,13 +255,13 @@ async def fetch_expireddomains_async() -> List[Dict]:
                         'wikipedia_links': wikipedia_links
                     })
                     
-                    print(f"✅ {idx+1}. {domain_name} | BL: {backlinks} | DP: {referring_domains} | Age: {age_years}y | Price: ${price} | Bids: {bids}")
+                    print(f"✅ {idx+1}. {domain_name} | BL: {backlinks} | DP: {referring_domains} | Age: {age_years}y | Price: ${price} | Bids: {bids} | Wiki: {wikipedia_links}")
                     
                 except Exception as e:
                     print(f"⚠️ 第 {idx+1} 行解析失败: {e}")
                     continue
             
-            print(f"✅ 成功解析 {len(domains)} 个域名")
+            print(f"✅ 成功解析 {len(domains)} 个域名（用于筛选）")
             
     except asyncio.TimeoutError:
         print("❌ 请求超时（30秒）")
@@ -399,6 +373,7 @@ class DomainScanner:
                 print("⚠️ ExpiredDomains 返回 0 个域名，回退到模拟数据")
                 return generate_mock_domains()[:8]
             
+            print(f"🔍 开始筛选 {len(domains)} 个域名...")
             return self._filter_high_quality(domains)
         
         elif self.mode == 'mixed':
@@ -422,20 +397,22 @@ class DomainScanner:
     def _filter_high_quality(self, domains: List[Dict]) -> List[Dict]:
         """过滤高质量域名（更新评分逻辑）"""
         
+        print("🔍 开始计算质量分数...")
+        
         # 🔥 新增：计算域名质量分数
         for domain in domains:
             score = 0
             
-            # DA 分数权重 40%
-            score += domain.get('da_score', 0) * 0.4
+            # DA 分数权重 30%
+            score += domain.get('da_score', 0) * 0.3
             
             # 外链数量权重 20%
             bl = domain.get('backlinks', 0)
             score += min(bl / 50, 20)  # 最高20分（2500+ 外链）
             
-            # 引用域权重 15%
+            # 引用域权重 20%
             rd = domain.get('referring_domains', 0)
-            score += min(rd / 10, 15)  # 最高15分（150+ 引用域）
+            score += min(rd / 5, 20)  # 最高20分（100+ 引用域）
             
             # 域名年龄权重 10%
             age = domain.get('domain_age', 0)
@@ -444,6 +421,10 @@ class DomainScanner:
             # 竞价价格权重 10%
             price = domain.get('price', 0)
             score += min(price / 200, 10)  # 最高10分（$2000+）
+            
+            # 竞价次数权重 5%
+            bids = domain.get('bids', 0)
+            score += min(bids / 10, 5)  # 最高5分（50+ bids）
             
             # 维基百科外链权重 5%
             wiki = domain.get('wikipedia_links', 0)
@@ -454,8 +435,9 @@ class DomainScanner:
         # 按质量分数排序
         domains.sort(key=lambda x: x.get('quality_score', 0), reverse=True)
         
-        print(f"✅ 域名质量评分完成，前3名：")
-        for idx, d in enumerate(domains[:3], 1):
-            print(f"  {idx}. {d['name']} - 质量分: {d.get('quality_score', 0)}")
+        print(f"✅ 域名质量评分完成，前10名：")
+        for idx, d in enumerate(domains[:10], 1):
+            print(f"  {idx}. {d['name']} - 质量分: {d.get('quality_score', 0)} (BL:{d.get('backlinks', 0)}, DP:{d.get('referring_domains', 0)}, Age:{d.get('domain_age', 0)}y, ${d.get('price', 0)}, Bids:{d.get('bids', 0)})")
         
+        # 🔥 关键：只返回前20个高质量域名
         return domains[:20]
