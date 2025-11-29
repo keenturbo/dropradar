@@ -501,18 +501,13 @@ async def fetch_expireddomains_multi_pages(pages: int = 4) -> List[Dict]:
     return all_domains
 
 
-def fetch_from_expireddomains() -> List[Dict]:
-    """同步包装器（抓取 4 页 = 100 个域名）"""
-    return asyncio.run(fetch_expireddomains_multi_pages(pages=4))
-
-
 class DomainScanner:
     """域名扫描器主类"""
     
     def __init__(self, mode='expireddomains'):
         self.mode = mode
     
-    def scan(self) -> Dict[str, List[Dict]]:
+    async def scan(self) -> Dict[str, List[Dict]]:
         """三层降级扫描，返回 {all_domains: [...], top_5: [...]}"""
         
         print("\n" + "="*80)
@@ -524,7 +519,8 @@ class DomainScanner:
         # ===== A 层：真实爬虫（不验证）=====
         if self.mode == 'expireddomains':
             print("🕷️ [A 层] 抓取 ExpiredDomains.net（4 页 = 100 个域名）")
-            raw_domains = fetch_from_expireddomains()
+            # 修正：直接调用异步方法，不通过 asyncio.run()
+            raw_domains = await fetch_expireddomains_multi_pages(pages=4)
             
             if raw_domains:
                 print(f"\n✅ [A 层] 抓取到 {len(raw_domains)} 个域名\n")
