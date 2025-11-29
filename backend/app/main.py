@@ -1,43 +1,11 @@
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from app.api.v1 import endpoints
 from app.core.database import init_db
+from app.api.v1 import endpoints
 
-# Port configuration for Railway
-PORT = int(os.getenv("PORT", 8000))
+app = FastAPI(title="DropRadar", version="1.0.0")
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Startup and shutdown events
-    """
-    # Startup: Initialize database tables
-    print("🚀 Starting DropRadar API...")
-    print("📊 Initializing database tables...")
-    try:
-        init_db()
-        print("✅ Database initialized successfully!")
-    except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
-        raise
-    
-    yield
-    
-    # Shutdown: cleanup if needed
-    print("👋 Shutting down DropRadar API...")
-
-
-app = FastAPI(
-    title="DropRadar API",
-    description="High Value Expired Domain & Traffic Interception Radar",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# CORS configuration
+# CORS 配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,35 +14,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 初始化数据库
+init_db()
+
+# 路由
+app.include_router(endpoints.router)
+
 
 @app.get("/")
-async def root():
-    return {
-        "message": "DropRadar API is running",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+def read_root():
+    return {"message": "DropRadar API is running"}
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint that doesn't require database"""
-    return {
-        "status": "healthy",
-        "message": "DropRadar API is running",
-        "version": "1.0.0"
-    }
-
-
-# Include API routes
-app.include_router(endpoints.router, prefix="/api/v1", tags=["domains"])
+def health_check():
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=PORT,
-        reload=False
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)
