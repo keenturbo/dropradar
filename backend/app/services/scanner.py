@@ -295,4 +295,8 @@ class DomainScanner:
             self.db.rollback()
             logger.error(f"数据库提交失败: {e}")
 
-        return final_results
+        # 返回字典格式，符合 endpoints.py 的期望
+        return {
+            "all_domains": final_results,
+            "top_5": final_results[:5]
+        }
