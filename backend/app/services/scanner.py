@@ -276,31 +276,8 @@ class DomainScanner:
             mock_data = self.generate_mock_domains(count=5 - len(final_results))
             final_results.extend(mock_data)
 
-        # --- 结果入库 ---
-        logger.info(f"💾 正在保存 {len(final_results)} 个域名到数据库...")
-        saved_count = 0
-        for item in final_results:
-            # 查重（使用 name 字段）
-            exists = self.db.query(Domain).filter(Domain.name == item['name']).first()
-            if not exists:
-                new_domain = Domain(
-                    name=item['name'],
-                    da_score=item.get('da_score', 0),
-                    backlinks=item.get('backlinks', 0),
-                    status=item.get('status', 'pending'),
-                    drop_date=item.get('drop_date')
-                )
-                self.db.add(new_domain)
-                saved_count += 1
-        
-        try:
-            self.db.commit()
-            logger.info(f"✅ 成功入库 {saved_count} 个新域名")
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"数据库提交失败: {e}")
-
-        # 返回字典格式，符合 endpoints.py 的期望
+        # 返回字典格式，由 endpoints.py 统一入库
+        logger.info(f"✅ 扫描完成，返回 {len(final_results)} 个域名")
         return {
             "all_domains": final_results,
             "top_5": final_results[:5]
