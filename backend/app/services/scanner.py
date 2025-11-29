@@ -176,7 +176,7 @@ class DomainScanner:
                         pass
 
                     domains.append({
-                        "domain": domain_name,
+                        "name": domain_name,
                         "backlinks": bl,
                         "da_score": 0,
                         "status": "pending"
@@ -217,11 +217,11 @@ class DomainScanner:
         for _ in range(count):
             d_name = f"{random.choice(prefixes)}{random.choice(suffixes)}{random.choice(tlds)}"
             mock_domains.append({
-                "domain": d_name,
+                "name": d_name,
                 "da_score": random.randint(15, 45),
                 "backlinks": random.randint(100, 5000),
                 "status": "available",
-                "expires_at": datetime.now() + timedelta(days=30)
+                "drop_date": datetime.now() + timedelta(days=30)
             })
             
         return mock_domains
@@ -239,11 +239,11 @@ class DomainScanner:
         if raw_domains:
             # 1. 批量获取真实 DA 分数
             logger.info(f"🔍 开始获取 DA 分数（共 {len(raw_domains)} 个域名）...")
-            domain_names = [d['domain'] for d in raw_domains]
+            domain_names = [d['name'] for d in raw_domains]
             da_scores = self.batch_get_pagerank(domain_names)
             
             for d in raw_domains:
-                d['da_score'] = da_scores.get(d['domain'], 0)
+                d['da_score'] = da_scores.get(d['name'], 0)
                 
             # 2. 按 DA 排序取 Top 5
             top_domains = sorted(raw_domains, key=lambda x: x['da_score'], reverse=True)[:5]
@@ -252,16 +252,16 @@ class DomainScanner:
             logger.info("🔍 对 Top 5 进行 WHOIS 验证...")
             valid_a_domains = []
             for d in top_domains:
-                logger.info(f"Checking {d['domain']}...")
-                verify_res = self.verify_expiry_date_via_whois(d['domain'])
+                logger.info(f"Checking {d['name']}...")
+                verify_res = self.verify_expiry_date_via_whois(d['name'])
                 
                 if verify_res['is_expired']:
-                    logger.info(f"✅ 验证通过: {d['domain']} (过期日: {verify_res['real_expiry']})")
-                    d['expires_at'] = verify_res['real_expiry']
+                    logger.info(f"✅ 验证通过: {d['name']} (过期日: {verify_res['real_expiry']})")
+                    d['drop_date'] = verify_res['real_expiry']
                     d['status'] = 'expired_confirmed'
                     valid_a_domains.append(d)
                 else:
-                    logger.info(f"❌ 已续费: {d['domain']} (到期日: {verify_res.get('real_expiry')})")
+                    logger.info(f"❌ 已续费: {d['name']} (到期日: {verify_res.get('real_expiry')})")
             
             final_results.extend(valid_a_domains)
         
@@ -276,14 +276,14 @@ class DomainScanner:
         saved_count = 0
         for item in final_results:
             # 查重（使用 name 字段）
-            exists = self.db.query(Domain).filter(Domain.name == item['domain']).first()
+            exists = self.db.query(Domain).filter(Domain.name == item['name']).first()
             if not exists:
                 new_domain = Domain(
-                    name=item['domain'],
+                    name=item['name'],
                     da_score=item.get('da_score', 0),
                     backlinks=item.get('backlinks', 0),
                     status=item.get('status', 'pending'),
-                    drop_date=item.get('expires_at')
+                    drop_date=item.get('drop_date')
                 )
                 self.db.add(new_domain)
                 saved_count += 1
