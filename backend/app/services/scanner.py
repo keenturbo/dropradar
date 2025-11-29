@@ -206,28 +206,36 @@ class DomainScanner:
         return all_domains
 
     def generate_mock_domains(self, count=20) -> List[Dict]:
-        """B层：生成模拟的高质量域名（降级方案）"""
+        """B层：生成模拟的高质量域名（降级方案）- 参考早期版本"""
         logger.info(f"⚠️ [B 层] 触发降级：生成 {count} 个模拟域名")
         
-        prefixes = ["cloud", "ai", "meta", "cyber", "tech", "data", "smart", "net", "web", "sys"]
-        suffixes = ["hub", "lab", "box", "base", "now", "ify", "ly", "io", "dev", "app"]
-        tlds = [".com", ".io", ".ai", ".net", ".org"]
+        # 参考早期版本的词库
+        TECH_KEYWORDS = ["ai", "gpt", "gemini", "claude", "quantum", "neural", "crypto", "defi", "metaverse"]
+        PREFIXES = ["super", "ultra", "mega", "next", "smart", "auto", "hyper"]
+        SUFFIXES = ["hub", "lab", "flow", "cloud", "stack", "forge", "sphere"]
         
         mock_domains = []
-        timestamp = int(datetime.now().timestamp())
         
         for i in range(count):
-            # 加入时间戳和索引确保唯一性
-            unique_id = f"{timestamp}{i}"[-6:]  # 取最后6位
-            d_name = f"{random.choice(prefixes)}{random.choice(suffixes)}{unique_id}{random.choice(tlds)}"
+            # 每次生成不同的组合
+            pattern = random.choice([
+                f"{random.choice(TECH_KEYWORDS)}{random.randint(2, 99)}",
+                f"{random.choice(PREFIXES)}-{random.choice(TECH_KEYWORDS)}",
+                f"{random.choice(TECH_KEYWORDS)}{random.choice(SUFFIXES)}"
+            ])
+            
+            tld = random.choice([".com", ".ai", ".io", ".net"])
+            d_name = pattern + tld
             
             mock_domains.append({
                 "name": d_name,
-                "da_score": random.randint(15, 45),
-                "backlinks": random.randint(100, 5000),
+                "da_score": random.randint(25, 65),
+                "backlinks": random.randint(50, 500),
                 "status": "available",
-                "drop_date": datetime.now() + timedelta(days=30)
+                "drop_date": datetime.now() + timedelta(days=random.randint(1, 30))
             })
+            
+            logger.info(f"  🎭 生成: {d_name} (DA: {mock_domains[-1]['da_score']})")
             
         return mock_domains
 
@@ -273,11 +281,12 @@ class DomainScanner:
         # --- B 层：模拟数据（如果 A 层结果不足 2 个）---
         if len(final_results) < 2:
             logger.info("⚠️ A 层有效数据不足，启动 B 层补位...")
-            mock_data = self.generate_mock_domains(count=5 - len(final_results))
+            mock_count = 8 if len(final_results) == 0 else (5 - len(final_results))
+            mock_data = self.generate_mock_domains(count=mock_count)
             final_results.extend(mock_data)
 
         # 返回字典格式，由 endpoints.py 统一入库
-        logger.info(f"✅ 扫描完成，返回 {len(final_results)} 个域名")
+        logger.info(f"✅ 扫描完成，返回 {len(final_results)} 个域名（含模拟数据）")
         return {
             "all_domains": final_results,
             "top_5": final_results[:5]
