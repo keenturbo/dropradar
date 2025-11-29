@@ -3,9 +3,43 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timedelta
 
-from app.database import get_db, Domain
+# 正确的导入方式
+from app.database import SessionLocal, engine, Base
 from app.services.scanner import DomainScanner
 from app.schemas.domain import DomainCreate, DomainResponse
+
+# 从 database.py 内部导入 Domain 模型
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime
+from sqlalchemy.sql import func
+
+# 定义 Domain 模型（与 database.py 中一致）
+class Domain(Base):
+    __tablename__ = "domains"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    da_score = Column(Integer, default=0)
+    backlinks = Column(Integer, default=0)
+    referring_domains = Column(Integer, default=0)
+    spam_score = Column(Integer, default=0)
+    drop_date = Column(Date, nullable=True)
+    tld = Column(String, nullable=True)
+    length = Column(Integer, default=0)
+    domain_age = Column(Integer, default=0)
+    price = Column(Float, default=0.0)
+    bids = Column(Integer, default=0)
+    wikipedia_links = Column(Integer, default=0)
+    quality_score = Column(Float, default=0.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+# 获取数据库会话
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 router = APIRouter()
 
