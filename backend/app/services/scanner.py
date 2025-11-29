@@ -504,24 +504,7 @@ async def fetch_expireddomains_multi_pages(pages: int = 4) -> List[Dict]:
 
 def fetch_from_expireddomains() -> List[Dict]:
     """同步包装器（抓取 4 页 = 100 个域名）"""
-    try:
-        loop = asyncio.get_event_loop()
-        
-        if loop.is_running():
-            import nest_asyncio
-            nest_asyncio.apply()
-            return asyncio.run(fetch_expireddomains_multi_pages(pages=4))
-        else:
-            return asyncio.run(fetch_expireddomains_multi_pages(pages=4))
-            
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(fetch_expireddomains_multi_pages(pages=4))
-            return result
-        finally:
-            loop.close()
+    return asyncio.run(fetch_expireddomains_multi_pages(pages=4))
 
 
 # ============= 修改：主扫描器类（三层降级） =============
