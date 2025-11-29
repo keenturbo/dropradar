@@ -49,7 +49,8 @@ async def scan_domains(
 ):
     """扫描域名（支持 mode 参数）"""
     scanner = DomainScanner(mode=mode)
-    result = scanner.scan()  # 返回 {all_domains: [...], top_5: [...]}
+    # 修正：调用异步方法
+    result = await scanner.scan()  # 返回 {all_domains: [...], top_5: [...]}
     
     all_domains = result.get("all_domains", [])
     top_5 = result.get("top_5", [])
