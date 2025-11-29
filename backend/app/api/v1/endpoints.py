@@ -13,8 +13,17 @@ logger = logging.getLogger(__name__)
 
 @router.get("/domains")
 def get_domains(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """获取域名列表"""
-    domains = db.query(Domain).order_by(Domain.created_at.desc()).offset(skip).limit(limit).all()
+    """获取域名列表（优先显示新域名）"""
+    # 🔥 优先返回新域名（is_new=True），然后按创建时间倒序
+    domains = db.query(Domain)\
+        .order_by(Domain.is_new.desc(), Domain.created_at.desc())\
+        .offset(skip)\
+        .limit(limit)\
+        .all()
+    
+    logger.info(f"📊 GET /api/v1/domains 返回 {len(domains)} 个域名")
+    if domains:
+        logger.info(f"   第一个域名: {domains[0].name} (is_new={domains[0].is_new}, created_at={domains[0].created_at})")
     return domains
 
 
@@ -35,6 +44,8 @@ def get_stats(db: Session = Depends(get_db)):
     avg_da = db.query(Domain).with_entities(Domain.da_score).all()
     avg_da_score = sum([d[0] for d in avg_da if d[0]]) / len(avg_da) if avg_da else 0
     
+    logger.info(f"📊 统计: 总 {total_domains} 个，新增 {new_domains} 个，平均 DA {avg_da_score:.1f}")
+    
     return {
         "total_domains": total_domains,
         "new_domains": new_domains,
@@ -45,11 +56,14 @@ def get_stats(db: Session = Depends(get_db)):
 @router.post("/scan")
 async def scan_domains(mode: str = "expireddomains", db: Session = Depends(get_db)):
     """扫描域名"""
+    logger.info(f"🔍 开始扫描 (mode={mode})")
     scanner = DomainScanner(mode=mode)
     result = await scanner.scan()  # 返回 {all_domains: [...], top_5: [...]}
     
     all_domains = result.get("all_domains", [])
     top_5 = result.get("top_5", [])
+    
+    logger.info(f"📦 扫描返回 {len(all_domains)} 个域名")
     
     # 🔥 新增：准备返回给前端的域名列表
     return_domains = []
@@ -120,8 +134,18 @@ async def scan_domains(mode: str = "expireddomains", db: Session = Depends(get_d
         logger.error(f"数据库提交失败: {e}")
         raise HTTPException(status_code=500, detail=f"数据库保存失败: {str(e)}")
     
+    # 🔥 标记旧域名为非新（is_new=False），这样新域名会优先显示）
+    try:
+        db.query(Domain).filter(
+            Domain.is_new == True,
+            Domain.id.notin_([d['id'] for d in return_domains])
+        ).update({'is_new': False})
+        db.commit()
+    except Exception as e:
+        logger.warning(f"更新旧域名状态失败: {e}")
+    
     # 🔥 返回本次扫描到的域名列表（前端直接展示）
-    return {
+    response = {
         "message": f"扫描完成：新增 {new_count} 个域名，更新 {updated_count} 个域名",
         "new_count": new_count,
         "updated_count": updated_count,
@@ -129,3 +153,6 @@ async def scan_domains(mode: str = "expireddomains", db: Session = Depends(get_d
         "domains": return_domains,  # 本次扫描的所有域名
         "top_5": return_domains[:5]  # Top 5
     }
+    
+    logger.info(f"📤 返回响应: {response['message']}")
+    return response
