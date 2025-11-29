@@ -7,7 +7,8 @@ import whois
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from app.core.config import settings
-from app.database import SessionLocal, Domain  # 修正导入路径
+from app.database import SessionLocal
+from app.models.domain import Domain  # 确认路径
 from app.services.ai_generator import AIGenerator
 
 # 配置日志
