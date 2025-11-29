@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     
     model_config = ConfigDict(
         env_file=".env",
-        extra="ignore"  # 🔥 关键：允许忽略额外的环境变量
+        extra="ignore"  # 允许忽略额外的环境变量
     )
 
 
