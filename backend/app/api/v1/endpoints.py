@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from datetime import datetime
 from typing import List
 
@@ -107,6 +107,115 @@ def delete_domain(domain_name: str, db: Session = Depends(get_db)):
     return {"message": f"Domain {domain_name} deleted successfully"}
 
 
+@router.post("/scan")
+def scan_domains(mode: str = Query("expireddomains"), db: Session = Depends(get_db)):
+    """
+    执行域名扫描任务
+    
+    参数：
+    - mode: 扫描模式（目前支持 expireddomains）
+    
+    流程：
+    1. 从 ExpiredDomains.net 抓取 4 页（100 个域名）
+    2. 批量获取 DA 分数
+    3. 计算综合质量分数
+    4. 返回 Top 5，保存到数据库
+    """
+    
+    print("\n" + "="*80)
+    print(f"🚀 开始执行域名扫描任务（模式: {mode}）...")
+    print("="*80 + "\n")
+    
+    scanner = DomainScanner(mode=mode)
+    top_domains = scanner.scan()  # 返回 Top 5
+    
+    if not top_domains:
+        raise HTTPException(status_code=500, detail="Scan failed, no domains found")
+    
+    # 保存到数据库
+    for domain_data in top_domains:
+        domain_name = domain_data['name']
+        
+        # 检查是否已存在
+        existing = db.query(Domain).filter(Domain.name == domain_name).first()
+        
+        if existing:
+            # 更新现有记录
+            existing.da_score = domain_data['da_score']
+            existing.backlinks = domain_data['backlinks']
+            existing.referring_domains = domain_data['referring_domains']
+            existing.quality_score = domain_data['quality_score']
+            existing.price = domain_data['price']
+            existing.bids = domain_data['bids']
+            existing.wikipedia_links = domain_data['wikipedia_links']
+            existing.domain_age = domain_data['domain_age']
+            existing.spam_score = domain_data['spam_score']
+            existing.last_seen = datetime.now()
+            existing.updated_at = datetime.now()
+            existing.is_new = False
+            
+            print(f"🔄 更新已存在的域名: {domain_name}")
+            
+        else:
+            # 创建新记录
+            db_domain = Domain(
+                name=domain_name,
+                da_score=domain_data['da_score'],
+                backlinks=domain_data['backlinks'],
+                referring_domains=domain_data['referring_domains'],
+                spam_score=domain_data['spam_score'],
+                status='available',
+                drop_date=domain_data['drop_date'],
+                tld=domain_data['tld'],
+                length=domain_data['length'],
+                domain_age=domain_data['domain_age'],
+                price=domain_data['price'],
+                bids=domain_data['bids'],
+                wikipedia_links=domain_data['wikipedia_links'],
+                quality_score=domain_data['quality_score'],
+                is_new=True,
+                notified=False
+            )
+            db.add(db_domain)
+            
+            print(f"✨ 保存新域名: {domain_name}")
+    
+    db.commit()
+    
+    # 刷新数据获取最新状态
+    top5_from_db = db.query(Domain).order_by(
+        Domain.quality_score.desc()
+    ).limit(5).all()
+    
+    print("\n" + "="*80)
+    print("✅ 扫描完成，已保存 Top 5 到数据库")
+    print("="*80 + "\n")
+    
+    return {
+        "status": "success",
+        "message": "Scan completed and Top 5 domains saved to database",
+        "mode": mode,
+        "total_scanned": 100,
+        "top_domains_saved": len(top_domains),
+        "top_5_domains": [
+            {
+                "name": d.name,
+                "quality_score": d.quality_score,
+                "da_score": d.da_score,
+                "backlinks": d.backlinks,
+                "referring_domains": d.referring_domains,
+                "price": d.price,
+                "bids": d.bids,
+                "domain_age": d.domain_age,
+                "wikipedia_links": d.wikipedia_links,
+                "is_new": d.is_new,
+                "created_at": d.created_at.isoformat()
+            }
+            for d in top5_from_db
+        ]
+    }
+
+
 @router.post("/scan-top5")
 def scan_and_save_top5(db: Session = Depends(get_db)):
     """
@@ -130,8 +239,6 @@ def scan_and_save_top5(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Scan failed, no domains found")
     
     # 保存到数据库
-    saved_domains = []
-    
     for domain_data in top_domains:
         domain_name = domain_data['name']
         
