@@ -214,8 +214,13 @@ class DomainScanner:
         tlds = [".com", ".io", ".ai", ".net", ".org"]
         
         mock_domains = []
-        for _ in range(count):
-            d_name = f"{random.choice(prefixes)}{random.choice(suffixes)}{random.choice(tlds)}"
+        timestamp = int(datetime.now().timestamp())
+        
+        for i in range(count):
+            # 加入时间戳和索引确保唯一性
+            unique_id = f"{timestamp}{i}"[-6:]  # 取最后6位
+            d_name = f"{random.choice(prefixes)}{random.choice(suffixes)}{unique_id}{random.choice(tlds)}"
+            
             mock_domains.append({
                 "name": d_name,
                 "da_score": random.randint(15, 45),
