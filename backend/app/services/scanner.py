@@ -177,7 +177,6 @@ class DomainScanner:
 
                     domains.append({
                         "domain": domain_name,
-                        "source": "expireddomains.net",
                         "backlinks": bl,
                         "da_score": 0,
                         "status": "pending"
@@ -221,9 +220,7 @@ class DomainScanner:
                 "domain": d_name,
                 "da_score": random.randint(15, 45),
                 "backlinks": random.randint(100, 5000),
-                "source": "mock_generator",
                 "status": "available",
-                "registered_at": datetime.now(),
                 "expires_at": datetime.now() + timedelta(days=30)
             })
             
@@ -278,15 +275,15 @@ class DomainScanner:
         logger.info(f"💾 正在保存 {len(final_results)} 个域名到数据库...")
         saved_count = 0
         for item in final_results:
-            exists = self.db.query(Domain).filter(Domain.domain == item['domain']).first()
+            # 查重（使用 name 字段）
+            exists = self.db.query(Domain).filter(Domain.name == item['domain']).first()
             if not exists:
                 new_domain = Domain(
-                    domain=item['domain'],
+                    name=item['domain'],
                     da_score=item.get('da_score', 0),
                     backlinks=item.get('backlinks', 0),
-                    source=item.get('source', 'unknown'),
                     status=item.get('status', 'pending'),
-                    expires_at=item.get('expires_at')
+                    drop_date=item.get('expires_at')
                 )
                 self.db.add(new_domain)
                 saved_count += 1
