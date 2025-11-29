@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.domain import Domain  # 确认路径
-from app.services.ai_generator import AIGenerator
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +17,6 @@ logger = logging.getLogger(__name__)
 class DomainScanner:
     def __init__(self):
         self.db = SessionLocal()
-        self.ai_generator = AIGenerator()
 
     def verify_expiry_date_via_whois(self, domain_name: str) -> Dict:
         """
@@ -178,32 +176,9 @@ class DomainScanner:
             
         return mock_domains
 
-    async def generate_ai_domains(self, topic="technology", count=10) -> List[Dict]:
-        """C层：调用 AI 生成域名（增值方案）"""
-        logger.info(f"🧠 [C 层] 触发 AI 生成：主题 {topic}, 数量 {count}")
-        try:
-            # 调用 AIGenerator 服务
-            ai_suggestions = await self.ai_generator.generate_domains(topic, count)
-            
-            formatted_domains = []
-            for name in ai_suggestions:
-                formatted_domains.append({
-                    "domain": name,
-                    "da_score": random.randint(25, 60), # AI 生成的通常质量较高
-                    "backlinks": 0,
-                    "source": "ai_claude",
-                    "status": "suggestion",
-                    "registered_at": datetime.now(),
-                    "expires_at": datetime.now() + timedelta(days=365)
-                })
-            return formatted_domains
-        except Exception as e:
-            logger.error(f"AI generation failed: {e}")
-            return []
-
     async def scan(self):
-        """主扫描逻辑：A -> B -> C 降级"""
-        logger.info("🚀 开始三层降级扫描...")
+        """主扫描逻辑：A -> B 降级（已移除 C 层 AI 功能）"""
+        logger.info("🚀 开始二层降级扫描...")
         
         final_results = []
         
@@ -243,14 +218,6 @@ class DomainScanner:
             logger.info("⚠️ A 层有效数据不足，启动 B 层补位...")
             mock_data = self.generate_mock_domains(count=5 - len(final_results))
             final_results.extend(mock_data)
-            
-        # --- C 层：AI 增值（可选，总是补充几个高质量建议）---
-        # 这里假设配置开启 AI
-        try:
-            ai_data = await self.generate_ai_domains(topic="SaaS and AI", count=3)
-            final_results.extend(ai_data)
-        except Exception as e:
-            logger.warning(f"C 层执行失败: {e}")
 
         # --- 结果入库 ---
         logger.info(f"💾 正在保存 {len(final_results)} 个域名到数据库...")
