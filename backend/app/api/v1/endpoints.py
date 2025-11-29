@@ -3,43 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timedelta
 
-# 正确的导入方式
-from app.database import SessionLocal, engine, Base
+from app.database import get_db
+from app.models.domain import Domain
 from app.services.scanner import DomainScanner
 from app.schemas.domain import DomainCreate, DomainResponse
-
-# 从 database.py 内部导入 Domain 模型
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime
-from sqlalchemy.sql import func
-
-# 定义 Domain 模型（与 database.py 中一致）
-class Domain(Base):
-    __tablename__ = "domains"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
-    da_score = Column(Integer, default=0)
-    backlinks = Column(Integer, default=0)
-    referring_domains = Column(Integer, default=0)
-    spam_score = Column(Integer, default=0)
-    drop_date = Column(Date, nullable=True)
-    tld = Column(String, nullable=True)
-    length = Column(Integer, default=0)
-    domain_age = Column(Integer, default=0)
-    price = Column(Float, default=0.0)
-    bids = Column(Integer, default=0)
-    wikipedia_links = Column(Integer, default=0)
-    quality_score = Column(Float, default=0.0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-# 获取数据库会话
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 router = APIRouter()
 
@@ -96,7 +63,7 @@ async def scan_domains(
         existing = db.query(Domain).filter(Domain.name == domain_data['name']).first()
         
         if existing:
-            # 更新现有记录（更新 DA、外链等数据）
+            # 更新现有记录
             existing.da_score = domain_data.get('da_score', 0)
             existing.backlinks = domain_data.get('backlinks', 0)
             existing.referring_domains = domain_data.get('referring_domains', 0)
@@ -106,6 +73,10 @@ async def scan_domains(
             existing.bids = domain_data.get('bids', 0)
             existing.wikipedia_links = domain_data.get('wikipedia_links', 0)
             existing.domain_age = domain_data.get('domain_age', 0)
+            existing.drop_date = domain_data.get('drop_date')
+            existing.tld = domain_data.get('tld', '')
+            existing.length = domain_data.get('length', 0)
+            existing.is_new = False  # 标记为已存在
             updated_count += 1
         else:
             # 新增记录
@@ -122,7 +93,10 @@ async def scan_domains(
                 price=domain_data.get('price', 0),
                 bids=domain_data.get('bids', 0),
                 wikipedia_links=domain_data.get('wikipedia_links', 0),
-                quality_score=domain_data.get('quality_score', 0)
+                quality_score=domain_data.get('quality_score', 0),
+                is_new=True,  # 新发现的域名
+                notified=False,
+                status="available"
             )
             db.add(new_domain)
             saved_count += 1
