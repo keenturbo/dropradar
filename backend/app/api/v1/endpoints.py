@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime
 from typing import List
 
-from database import get_db
-from models.domain import Domain
-from schemas.domain import DomainResponse, DomainCreate, DomainUpdate
-from services.scanner import DomainScanner
+from app.database import get_db
+from app.models.domain import Domain
+from app.schemas.domain import DomainResponse, DomainCreate, DomainUpdate
+from app.services.scanner import DomainScanner
 
 router = APIRouter(
     prefix="/api/v1",
