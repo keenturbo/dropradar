@@ -10,13 +10,12 @@ from bs4 import BeautifulSoup
 # ========== 配置 ==========
 OPENPAGERANK_API_KEY = os.getenv("OPENPAGERANK_API_KEY", "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84")
 DOMAINSDB_API_KEY = os.getenv("DOMAINSDB_API_KEY", "7f783667-ba54-4954-94fa-760d83765a85")
-EXPIREDDOMAINS_USERNAME = os.getenv("EXPIREDDOMAINS_USERNAME", "turboexpireddomains")
-EXPIREDDOMAINS_PASSWORD = os.getenv("EXPIREDDOMAINS_PASSWORD", "zeBtu2-kigsij-teqmab")
 EXPIREDDOMAINS_COOKIE = os.getenv("EXPIREDDOMAINS_COOKIE", "")
 
-BROWSER_PROFILE = "chrome133a"
+# 🔥 修复：使用兼容性更强的浏览器版本
+BROWSER_PROFILE = "chrome110"  # ← 改用 chrome110（所有 curl_cffi 版本都支持）
 TIMEOUT = 30
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
 
 def get_open_pagerank(domain: str) -> int:
     """获取真实的域名权重 - Open PageRank API"""
@@ -121,7 +120,7 @@ def get_dynamic_headers(referer: str = None) -> Dict[str, str]:
 
 
 async def fetch_expireddomains_async() -> List[Dict]:
-    """使用 curl_cffi 异步获取域名（Grok 同款方案）"""
+    """使用 curl_cffi 异步获取域名（修复版）"""
     
     cookie = os.getenv("EXPIREDDOMAINS_COOKIE", "")
     if not cookie:
@@ -144,7 +143,7 @@ async def fetch_expireddomains_async() -> List[Dict]:
             response = await session.get(
                 url,
                 headers=headers,
-                impersonate=BROWSER_PROFILE,
+                impersonate=BROWSER_PROFILE,  # 🔥 使用 chrome110
                 timeout=TIMEOUT,
                 proxies=proxies,
                 allow_redirects=True
@@ -158,6 +157,7 @@ async def fetch_expireddomains_async() -> List[Dict]:
             
             if response.status_code != 200:
                 print(f"❌ HTTP 错误：{response.status_code}")
+                print(f"响应内容：{response.text[:500]}")
                 return []
             
             if "login" in response.url.lower():
@@ -169,6 +169,9 @@ async def fetch_expireddomains_async() -> List[Dict]:
             
             if not table:
                 print("❌ 未找到域名表格")
+                with open('/tmp/debug.html', 'w') as f:
+                    f.write(response.text)
+                print("💾 调试信息已保存到 /tmp/debug.html")
                 return []
             
             tbody = table.find('tbody')
@@ -242,16 +245,30 @@ async def fetch_expireddomains_async() -> List[Dict]:
     return domains
 
 
+# 🔥 修复事件循环冲突
 def fetch_from_expireddomains() -> List[Dict]:
-    """同步包装器（兼容原有代码）"""
+    """同步包装器（修复 FastAPI 事件循环冲突）"""
     try:
-        return asyncio.run(fetch_expireddomains_async())
+        # 尝试获取当前事件循环
+        loop = asyncio.get_event_loop()
+        
+        # 如果循环正在运行（FastAPI 环境），直接创建任务
+        if loop.is_running():
+            import nest_asyncio
+            nest_asyncio.apply()  # 允许嵌套事件循环
+            return asyncio.run(fetch_expireddomains_async())
+        else:
+            return asyncio.run(fetch_expireddomains_async())
+            
     except RuntimeError:
+        # 如果没有事件循环，创建新的
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(fetch_expireddomains_async())
-        loop.close()
-        return result
+        try:
+            result = loop.run_until_complete(fetch_expireddomains_async())
+            return result
+        finally:
+            loop.close()
 
 
 def enrich_with_pagerank(domains: List[Dict]) -> List[Dict]:
