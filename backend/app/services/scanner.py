@@ -1,22 +1,31 @@
 import asyncio
 import logging
 import random
+import re
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import whois
+import requests
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from app.core.config import settings
 from app.database import SessionLocal
-from app.models.domain import Domain  # 确认路径
+from app.models.domain import Domain
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+OPENPAGERANK_API_KEY = settings.OPENPAGERANK_API_KEY if hasattr(settings, 'OPENPAGERANK_API_KEY') else "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84"
+
 class DomainScanner:
-    def __init__(self):
+    def __init__(self, mode: str = "expireddomains"):
+        """
+        初始化扫描器
+        :param mode: 扫描模式，默认 "expireddomains"
+        """
         self.db = SessionLocal()
+        self.mode = mode
 
     def verify_expiry_date_via_whois(self, domain_name: str) -> Dict:
         """
@@ -35,8 +44,6 @@ class DomainScanner:
                 return {'real_expiry': None, 'is_expired': False, 'is_valid': False}
                 
             now = datetime.now()
-            # 如果到期时间小于当前时间，说明已过期（且未续费）
-            
             is_expired = expiry_date < now
             
             return {
@@ -45,14 +52,77 @@ class DomainScanner:
                 'is_valid': True
             }
         except Exception as e:
-            # logger.error(f"WHOIS lookup failed for {domain_name}: {str(e)}")
             return {'real_expiry': None, 'is_expired': False, 'is_valid': False}
+
+    def extract_number(self, text: str) -> int:
+        """正则提取数字，处理 1.8K、1,992 等格式"""
+        if not text:
+            return 0
+        
+        match = re.search(r'(\d+(?:\.\d+)?)\s*K', text.upper())
+        if match:
+            return int(float(match.group(1)) * 1000)
+        
+        match = re.search(r'(\d[\d,]*)', text)
+        if match:
+            return int(match.group(1).replace(',', ''))
+        
+        return 0
+
+    def batch_get_pagerank(self, domain_names: List[str]) -> Dict[str, int]:
+        """批量获取 DA 分数（通过 OpenPageRank API）"""
+        if not domain_names:
+            return {}
+        
+        results = {}
+        batch_size = 100
+        
+        logger.info(f"🔍 开始批量获取 {len(domain_names)} 个域名的 DA 分数...")
+        
+        for i in range(0, len(domain_names), batch_size):
+            batch = domain_names[i:i+batch_size]
+            
+            params = {f"domains[{j}]": domain for j, domain in enumerate(batch)}
+            
+            try:
+                response = requests.get(
+                    "https://openpagerank.com/api/v1.0/getPageRank",
+                    params=params,
+                    headers={'API-OPR': OPENPAGERANK_API_KEY},
+                    timeout=10
+                )
+                
+                data = response.json()
+                
+                if data.get('status_code') == 200 and data.get('response'):
+                    for item in data['response']:
+                        domain = item['domain']
+                        page_rank = item.get('page_rank_decimal', 0)
+                        da_score = int(page_rank * 10)
+                        results[domain] = da_score
+                        logger.info(f"  ✅ {domain} → DA: {da_score}")
+                    
+                    logger.info(f"✅ 批次完成: 成功获取 {len(batch)} 个域名的 DA")
+                else:
+                    logger.warning(f"⚠️ OpenPageRank API 错误: {data}")
+                    for domain in batch:
+                        results[domain] = 0
+                
+                import time
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"❌ 批量获取 DA 失败: {e}")
+                for domain in batch:
+                    results[domain] = 0
+        
+        return results
 
     async def fetch_single_page(self, page: int, retries=3) -> List[Dict]:
         """抓取单页数据（带重试）"""
         url = "https://member.expireddomains.net/domains/expiredcom/"
         cookies = {
-            "s_id": settings.EXPIRED_DOMAINS_COOKIE  # 从环境变量获取
+            "s_id": settings.EXPIRED_DOMAINS_COOKIE
         }
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
@@ -65,14 +135,13 @@ class DomainScanner:
         params = {
             "start": start,
             "flimit": 25,
-            "fwhois": "1",    # 仅显示有 Whois 的
-            "fmarket": "0",   # 排除市场域名
-            "flast24": "1"    # 仅最近 24 小时
+            "fwhois": "1",
+            "fmarket": "0",
+            "flast24": "1"
         }
 
         for attempt in range(retries):
             try:
-                # 注意：curl_cffi 在某些环境下 close 时会报错，这里尝试忽略
                 try:
                     async with AsyncSession() as session:
                         resp = await session.get(url, params=params, cookies=cookies, headers=headers, timeout=30)
@@ -83,7 +152,6 @@ class DomainScanner:
                             
                         content = resp.text
                 except RuntimeError:
-                    # 忽略 curl_cffi 在关闭 loop 时的已知错误
                     pass
                 except Exception as e:
                     logger.error(f"Request error on page {page}: {e}")
@@ -100,14 +168,10 @@ class DomainScanner:
                         
                     domain_name = cols[0].get_text(strip=True)
                     
-                    # 提取其他指标 (示例)
-                    bl = 0 # Backlinks
+                    bl = 0
                     try:
                         bl_text = cols[2].get_text(strip=True)
-                        if 'K' in bl_text:
-                            bl = int(float(bl_text.replace('K', '')) * 1000)
-                        else:
-                            bl = int(bl_text)
+                        bl = self.extract_number(bl_text)
                     except:
                         pass
 
@@ -115,7 +179,7 @@ class DomainScanner:
                         "domain": domain_name,
                         "source": "expireddomains.net",
                         "backlinks": bl,
-                        "da_score": 0, # 稍后计算
+                        "da_score": 0,
                         "status": "pending"
                     })
                 
@@ -142,17 +206,6 @@ class DomainScanner:
         logger.info(f"✅ 共抓取 {len(all_domains)} 个域名")
         return all_domains
 
-    def calculate_da_mock(self, domain: str) -> int:
-        """模拟计算 DA 分数 (这里用简单的伪随机算法，实际应调 API)"""
-        # 基于域名长度和字符做简单的哈希映射，保持同一个域名分数固定
-        seed = sum(ord(c) for c in domain)
-        random.seed(seed)
-        
-        # 80% 概率低分，20% 概率高分
-        if random.random() > 0.8:
-            return random.randint(20, 50)
-        return random.randint(0, 15)
-
     def generate_mock_domains(self, count=20) -> List[Dict]:
         """B层：生成模拟的高质量域名（降级方案）"""
         logger.info(f"⚠️ [B 层] 触发降级：生成 {count} 个模拟域名")
@@ -177,7 +230,7 @@ class DomainScanner:
         return mock_domains
 
     async def scan(self):
-        """主扫描逻辑：A -> B 降级（已移除 C 层 AI 功能）"""
+        """主扫描逻辑：A -> B 降级"""
         logger.info("🚀 开始二层降级扫描...")
         
         final_results = []
@@ -186,12 +239,14 @@ class DomainScanner:
         logger.info("🕷️ [A 层] 抓取 ExpiredDomains.net")
         raw_domains = await self.fetch_expireddomains_multi_pages(pages=4)
         
-        # 只有当抓取到数据时才进行验证
         if raw_domains:
-            # 1. 计算/获取 DA 分数
-            logger.info(f"🔍 开始计算质量分数（共 {len(raw_domains)} 个域名）...")
+            # 1. 批量获取真实 DA 分数
+            logger.info(f"🔍 开始获取 DA 分数（共 {len(raw_domains)} 个域名）...")
+            domain_names = [d['domain'] for d in raw_domains]
+            da_scores = self.batch_get_pagerank(domain_names)
+            
             for d in raw_domains:
-                d['da_score'] = self.calculate_da_mock(d['domain'])
+                d['da_score'] = da_scores.get(d['domain'], 0)
                 
             # 2. 按 DA 排序取 Top 5
             top_domains = sorted(raw_domains, key=lambda x: x['da_score'], reverse=True)[:5]
@@ -223,7 +278,6 @@ class DomainScanner:
         logger.info(f"💾 正在保存 {len(final_results)} 个域名到数据库...")
         saved_count = 0
         for item in final_results:
-            # 查重
             exists = self.db.query(Domain).filter(Domain.domain == item['domain']).first()
             if not exists:
                 new_domain = Domain(
