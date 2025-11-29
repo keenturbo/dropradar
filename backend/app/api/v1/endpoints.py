@@ -3,8 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime, timedelta
 
-from app.database.session import get_db
-from app.database.models import Domain
+from app.database import get_db, Domain
 from app.services.scanner import DomainScanner
 from app.schemas.domain import DomainCreate, DomainResponse
 
