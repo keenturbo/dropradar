@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     expireddomains_cookie: str = ""
     proxy_url: str = ""
     
+    # AI Generation (Optional)
+    anthropic_api_key: str = ""  # Claude API Key
+    google_api_key: str = ""  # Gemini API Key
+    ai_provider: str = "claude"  # claude 或 gemini
+    ai_model_claude: str = "claude-3-5-sonnet-20241022"
+    ai_model_gemini: str = "gemini-2.0-flash-exp"
+    
     # App Config
     debug: bool = False
     app_name: str = "DropRadar"
