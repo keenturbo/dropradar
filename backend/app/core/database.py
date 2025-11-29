@@ -1,26 +1,25 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
+
 from app.core.config import settings
 
-# Create database engine
+# 使用小写字段名 database_url
 engine = create_engine(
-    settings.DATABASE_URL,
+    settings.database_url,
+    echo=False,
     pool_pre_ping=True,
-    echo=settings.DEBUG
+    pool_size=5,
+    max_overflow=10
 )
 
-# Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Create base class for models
 Base = declarative_base()
 
 
-def get_db():
-    """
-    Dependency function to get database session
-    """
+def get_db() -> Session:
     db = SessionLocal()
     try:
         yield db
@@ -29,13 +28,4 @@ def get_db():
 
 
 def init_db():
-    """
-    Initialize database tables
-    Creates all tables defined in models if they don't exist
-    """
-    # Import models to register them with Base
-    from app.models import domain  # noqa: F401
-    
-    # Create all tables
     Base.metadata.create_all(bind=engine)
-    print(f"✅ Created tables: {list(Base.metadata.tables.keys())}")
