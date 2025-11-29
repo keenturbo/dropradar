@@ -20,7 +20,7 @@ class DomainScanner:
         self.db = SessionLocal()
         self.ai_generator = AIGenerator()
 
-    def verify_expiry_date_via_whois(self, domain_name: str) -&gt; Dict:
+    def verify_expiry_date_via_whois(self, domain_name: str) -> Dict:
         """
         验证域名的真实到期时间
         返回: {'real_expiry': datetime, 'is_expired': bool, 'is_valid': bool}
@@ -38,10 +38,8 @@ class DomainScanner:
                 
             now = datetime.now()
             # 如果到期时间小于当前时间，说明已过期（且未续费）
-            # 注意：有些域名过期后会有宽限期，whois 显示的过期时间可能没变，或者是原来的一年后
-            # 这里简单判断：如果过期时间在未来，说明已续费
             
-            is_expired = expiry_date &lt; now
+            is_expired = expiry_date < now
             
             return {
                 'real_expiry': expiry_date,
@@ -52,7 +50,7 @@ class DomainScanner:
             # logger.error(f"WHOIS lookup failed for {domain_name}: {str(e)}")
             return {'real_expiry': None, 'is_expired': False, 'is_valid': False}
 
-    async def fetch_single_page(self, page: int, retries=3) -&gt; List[Dict]:
+    async def fetch_single_page(self, page: int, retries=3) -> List[Dict]:
         """抓取单页数据（带重试）"""
         url = "https://member.expireddomains.net/domains/expiredcom/"
         cookies = {
@@ -99,7 +97,7 @@ class DomainScanner:
                 
                 for row in rows:
                     cols = row.find_all('td')
-                    if len(cols) &lt; 2:
+                    if len(cols) < 2:
                         continue
                         
                     domain_name = cols[0].get_text(strip=True)
@@ -132,7 +130,7 @@ class DomainScanner:
         
         return []
 
-    async def fetch_expireddomains_multi_pages(self, pages=4) -&gt; List[Dict]:
+    async def fetch_expireddomains_multi_pages(self, pages=4) -> List[Dict]:
         """并发抓取多页"""
         logger.info(f"🚀 开始抓取前 {pages} 页（共约 {pages*25} 个域名）...")
         tasks = [self.fetch_single_page(page) for page in range(1, pages + 1)]
@@ -146,18 +144,18 @@ class DomainScanner:
         logger.info(f"✅ 共抓取 {len(all_domains)} 个域名")
         return all_domains
 
-    def calculate_da_mock(self, domain: str) -&gt; int:
+    def calculate_da_mock(self, domain: str) -> int:
         """模拟计算 DA 分数 (这里用简单的伪随机算法，实际应调 API)"""
         # 基于域名长度和字符做简单的哈希映射，保持同一个域名分数固定
         seed = sum(ord(c) for c in domain)
         random.seed(seed)
         
         # 80% 概率低分，20% 概率高分
-        if random.random() &gt; 0.8:
+        if random.random() > 0.8:
             return random.randint(20, 50)
         return random.randint(0, 15)
 
-    def generate_mock_domains(self, count=20) -&gt; List[Dict]:
+    def generate_mock_domains(self, count=20) -> List[Dict]:
         """B层：生成模拟的高质量域名（降级方案）"""
         logger.info(f"⚠️ [B 层] 触发降级：生成 {count} 个模拟域名")
         
@@ -180,7 +178,7 @@ class DomainScanner:
             
         return mock_domains
 
-    async def generate_ai_domains(self, topic="technology", count=10) -&gt; List[Dict]:
+    async def generate_ai_domains(self, topic="technology", count=10) -> List[Dict]:
         """C层：调用 AI 生成域名（增值方案）"""
         logger.info(f"🧠 [C 层] 触发 AI 生成：主题 {topic}, 数量 {count}")
         try:
@@ -241,7 +239,7 @@ class DomainScanner:
             final_results.extend(valid_a_domains)
         
         # --- B 层：模拟数据（如果 A 层结果不足 2 个）---
-        if len(final_results) &lt; 2:
+        if len(final_results) < 2:
             logger.info("⚠️ A 层有效数据不足，启动 B 层补位...")
             mock_data = self.generate_mock_domains(count=5 - len(final_results))
             final_results.extend(mock_data)
