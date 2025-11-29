@@ -19,7 +19,7 @@ Base.metadata.drop_all(bind=engine)
 init_db()
 
 # 路由
-app.include_router(endpoints.router)
+app.include_router(endpoints.router, prefix="/api/v1")
 
 
 @app.get("/")
