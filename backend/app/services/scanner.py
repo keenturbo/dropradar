@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 import re
+import uuid
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import whois
@@ -203,13 +204,41 @@ class DomainScanner:
                 all_domains.extend(res)
         
         logger.info(f"✅ 共抓取 {len(all_domains)} 个域名")
+        
+        # 🔥 新增：抓取到的域名立即全部存入数据库
+        if all_domains:
+            logger.info(f"💾 开始将 {len(all_domains)} 个抓取域名存入数据库...")
+            saved_count = 0
+            for d in all_domains:
+                try:
+                    exists = self.db.query(Domain).filter(Domain.name == d['name']).first()
+                    if not exists:
+                        new_domain = Domain(
+                            name=d['name'],
+                            da_score=d.get('da_score', 0),
+                            backlinks=d.get('backlinks', 0),
+                            status='scraped',  # 标记为爬取的
+                            drop_date=None
+                        )
+                        self.db.add(new_domain)
+                        saved_count += 1
+                except Exception as e:
+                    logger.error(f"保存域名 {d['name']} 失败: {e}")
+                    continue
+            
+            try:
+                self.db.commit()
+                logger.info(f"✅ 成功将 {saved_count} 个抓取域名存入数据库")
+            except Exception as e:
+                self.db.rollback()
+                logger.error(f"批量保存失败: {e}")
+        
         return all_domains
 
     def generate_mock_domains(self, count=20) -> List[Dict]:
-        """B层：生成模拟的高质量域名（降级方案）- 参考早期版本"""
+        """B层：生成模拟的高质量域名（确保唯一）"""
         logger.info(f"⚠️ [B 层] 触发降级：生成 {count} 个模拟域名")
         
-        # 参考早期版本的词库
         TECH_KEYWORDS = ["ai", "gpt", "gemini", "claude", "quantum", "neural", "crypto", "defi", "metaverse"]
         PREFIXES = ["super", "ultra", "mega", "next", "smart", "auto", "hyper"]
         SUFFIXES = ["hub", "lab", "flow", "cloud", "stack", "forge", "sphere"]
@@ -217,11 +246,13 @@ class DomainScanner:
         mock_domains = []
         
         for i in range(count):
-            # 每次生成不同的组合
+            # 使用 UUID 确保唯一性
+            unique_suffix = str(uuid.uuid4())[:8]
+            
             pattern = random.choice([
-                f"{random.choice(TECH_KEYWORDS)}{random.randint(2, 99)}",
-                f"{random.choice(PREFIXES)}-{random.choice(TECH_KEYWORDS)}",
-                f"{random.choice(TECH_KEYWORDS)}{random.choice(SUFFIXES)}"
+                f"{random.choice(TECH_KEYWORDS)}-{unique_suffix}",
+                f"{random.choice(PREFIXES)}{random.choice(TECH_KEYWORDS)}-{unique_suffix}",
+                f"{random.choice(TECH_KEYWORDS)}{random.choice(SUFFIXES)}-{unique_suffix}"
             ])
             
             tld = random.choice([".com", ".ai", ".io", ".net"])
@@ -231,7 +262,7 @@ class DomainScanner:
                 "name": d_name,
                 "da_score": random.randint(25, 65),
                 "backlinks": random.randint(50, 500),
-                "status": "available",
+                "status": "mock",  # 标记为模拟的
                 "drop_date": datetime.now() + timedelta(days=random.randint(1, 30))
             })
             
@@ -245,21 +276,22 @@ class DomainScanner:
         
         final_results = []
         
-        # --- A 层：真实爬虫 ---
+        # --- A 层：真实爬虫（100个域名全存库）---
         logger.info("🕷️ [A 层] 抓取 ExpiredDomains.net")
         raw_domains = await self.fetch_expireddomains_multi_pages(pages=4)
         
         if raw_domains:
-            # 1. 批量获取真实 DA 分数
-            logger.info(f"🔍 开始获取 DA 分数（共 {len(raw_domains)} 个域名）...")
-            domain_names = [d['name'] for d in raw_domains]
+            # 1. 批量获取真实 DA 分数（仅对 Top 20）
+            logger.info(f"🔍 开始获取 Top 20 的 DA 分数...")
+            top_20 = sorted(raw_domains, key=lambda x: x.get('backlinks', 0), reverse=True)[:20]
+            domain_names = [d['name'] for d in top_20]
             da_scores = self.batch_get_pagerank(domain_names)
             
-            for d in raw_domains:
+            for d in top_20:
                 d['da_score'] = da_scores.get(d['name'], 0)
                 
             # 2. 按 DA 排序取 Top 5
-            top_domains = sorted(raw_domains, key=lambda x: x['da_score'], reverse=True)[:5]
+            top_domains = sorted(top_20, key=lambda x: x['da_score'], reverse=True)[:5]
             
             # 3. WHOIS 验证
             logger.info("🔍 对 Top 5 进行 WHOIS 验证...")
@@ -278,7 +310,7 @@ class DomainScanner:
             
             final_results.extend(valid_a_domains)
         
-        # --- B 层：模拟数据（如果 A 层结果不足 2 个）---
+        # --- B 层：模拟数据（如果 A 层结果不足）---
         if len(final_results) < 2:
             logger.info("⚠️ A 层有效数据不足，启动 B 层补位...")
             mock_count = 8 if len(final_results) == 0 else (5 - len(final_results))
@@ -286,7 +318,7 @@ class DomainScanner:
             final_results.extend(mock_data)
 
         # 返回字典格式，由 endpoints.py 统一入库
-        logger.info(f"✅ 扫描完成，返回 {len(final_results)} 个域名（含模拟数据）")
+        logger.info(f"✅ 扫描完成，返回 {len(final_results)} 个域名（待展示）")
         return {
             "all_domains": final_results,
             "top_5": final_results[:5]
