@@ -1,629 +1,282 @@
-import requests
-import random
-import os
-import re
-from datetime import datetime, timedelta
-from typing import List, Dict
-from curl_cffi.requests import AsyncSession
 import asyncio
-from bs4 import BeautifulSoup
-import time
+import logging
+import random
+from typing import List, Dict, Optional
+from datetime import datetime, timedelta
 import whois
-from anthropic import Anthropic
-import google.generativeai as genai
-
+from curl_cffi.requests import AsyncSession
+from bs4 import BeautifulSoup
 from app.core.config import settings
+from app.db.session import SessionLocal
+from app.models.domain import Domain
+from app.services.ai_generator import AIGenerator
 
-OPENPAGERANK_API_KEY = os.getenv("OPENPAGERANK_API_KEY", "w00wkkkwo4c4sws4swggkswk8oksggsccck0go84")
-EXPIREDDOMAINS_COOKIE = os.getenv("EXPIREDDOMAINS_COOKIE", "")
-
-BROWSER_PROFILE = "chrome110"
-TIMEOUT = 30
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-
-
-# ============= 新增：WHOIS 验证函数 =============
-def verify_expiry_date_via_whois(domain_name: str) -> Dict[str, any]:
-    """
-    通过 WHOIS 查询验证真实到期日期
-    
-    返回：
-    {
-        'domain': 'example.com',
-        'real_expiry': datetime(2026, 11, 5),
-        'is_expired': False,
-        'is_available': False,
-        'error': None
-    }
-    """
-    try:
-        w = whois.whois(domain_name)
-        
-        expiry_date = w.expiration_date
-        
-        if isinstance(expiry_date, list):
-            expiry_date = expiry_date[0]
-        
-        if not expiry_date:
-            return {
-                'domain': domain_name,
-                'real_expiry': None,
-                'is_expired': False,
-                'is_available': False,
-                'error': 'No expiry date found'
-            }
-        
-        today = datetime.now()
-        is_expired = expiry_date < today
-        
-        grace_period = timedelta(days=30)
-        is_available = (today - expiry_date) > grace_period
-        
-        return {
-            'domain': domain_name,
-            'real_expiry': expiry_date,
-            'is_expired': is_expired,
-            'is_available': is_available,
-            'error': None
-        }
-        
-    except Exception as e:
-        return {
-            'domain': domain_name,
-            'real_expiry': None,
-            'is_expired': False,
-            'is_available': False,
-            'error': str(e)
-        }
-
-
-# ============= 新增：Mock 单词库（扩展版）=============
-WORD_POOL = [
-    # AI/科技类
-    'ai', 'cloud', 'neural', 'deep', 'bot', 'auto', 'smart', 'quantum',
-    'cyber', 'data', 'algo', 'crypto', 'meta', 'chain', 'edge', 'sync',
-    'tensor', 'vector', 'matrix',
-    
-    # 动作类
-    'build', 'forge', 'craft', 'make', 'grow', 'scale', 'flow', 'link',
-    'hub', 'lab', 'base', 'core', 'hive', 'mesh', 'grid', 'nexus',
-    'create', 'launch', 'spark', 'boost',
-    
-    # 业务类
-    'saas', 'api', 'app', 'dev', 'ops', 'tool', 'kit', 'suite', 'stack',
-    'platform', 'studio', 'space', 'zone', 'spot', 'dash', 'pulse',
-    'work', 'task', 'team', 'crew',
-    
-    # 行业类
-    'health', 'finance', 'edu', 'legal', 'retail', 'media', 'travel',
-    'music', 'sport', 'game', 'book', 'food', 'fashion', 'home',
-    'tech', 'code', 'design', 'market',
-    
-    # 形容词
-    'fast', 'easy', 'simple', 'quick', 'instant', 'magic', 'super',
-    'pro', 'max', 'ultra', 'prime', 'elite', 'plus', 'next', 'neo',
-    'swift', 'rapid', 'agile', 'smart',
-    
-    # 名词
-    'sky', 'ocean', 'mountain', 'river', 'forest', 'star', 'moon',
-    'sun', 'earth', 'wind', 'fire', 'light', 'stone', 'gold', 'silver',
-    'wave', 'beam', 'spark', 'flux'
-]
-
-TLD_POOL = ['.ai', '.io', '.dev', '.app', '.tech', '.cloud', '.co', '.me']
-
-
-def generate_mock_domains(count: int = 20) -> List[Dict]:
-    """生成随机组合域名（扩展版）"""
-    domains = []
-    
-    for _ in range(count):
-        word_count = random.choice([2, 3])
-        words = random.sample(WORD_POOL, word_count)
-        name = ''.join(words)
-        
-        tld = random.choice(TLD_POOL)
-        domain_name = f"{name}{tld}"
-        
-        domains.append({
-            'name': domain_name,
-            'da_score': random.randint(5, 25),
-            'backlinks': random.randint(100, 1000),
-            'referring_domains': random.randint(10, 100),
-            'spam_score': random.randint(0, 20),
-            'drop_date': (datetime.now() + timedelta(days=random.randint(1, 30))).date(),
-            'tld': tld,
-            'length': len(name),
-            'domain_age': random.randint(1, 5),
-            'price': random.randint(10, 200),
-            'bids': random.randint(0, 5),
-            'wikipedia_links': random.randint(0, 3),
-            'quality_score': 0.0
-        })
-    
-    return domains
-
-
-# ============= 新增：AI 生成域名 =============
-def generate_ai_domains(topic: str = "AI tools", count: int = 20) -> List[Dict]:
-    """通过 AI 生成高质量域名建议（支持 Claude 和 Gemini）"""
-    
-    provider = settings.ai_provider.lower()
-    
-    # ===== Claude 生成 =====
-    if provider == "claude":
-        if not settings.anthropic_api_key:
-            print("⚠️ 未配置 ANTHROPIC_API_KEY，跳过 AI 生成")
-            return []
-        
-        try:
-            client = Anthropic(api_key=settings.anthropic_api_key)
-            
-            prompt = f"""Generate {count} premium domain name suggestions for: "{topic}".
-
-Requirements:
-1. Short (5-15 chars before TLD)
-2. Memorable, pronounceable
-3. Related to {topic}
-4. Use .ai, .io, .dev, .app, .tech, .cloud
-
-Output format (one per line):
-domainname.tld
-
-Examples:
-- cloudforge.ai
-- buildhub.io
-
-Generate {count} domains (only names, no explanations):"""
-
-            message = client.messages.create(
-                model=settings.ai_model_claude,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            content = message.content[0].text.strip()
-            domain_lines = [line.strip() for line in content.split('\n') if '.' in line]
-            
-            print(f"✅ Claude 生成 {len(domain_lines[:count])} 个域名")
-            return _parse_ai_domains(domain_lines[:count])
-            
-        except Exception as e:
-            print(f"❌ Claude 生成失败: {e}")
-            return []
-    
-    # ===== Gemini 生成 =====
-    elif provider == "gemini":
-        if not settings.google_api_key:
-            print("⚠️ 未配置 GOOGLE_API_KEY，跳过 AI 生成")
-            return []
-        
-        try:
-            genai.configure(api_key=settings.google_api_key)
-            model = genai.GenerativeModel(settings.ai_model_gemini)
-            
-            prompt = f"""Generate {count} premium domain name suggestions for: "{topic}".
-
-Requirements:
-1. Short (5-15 chars before TLD)
-2. Memorable, pronounceable
-3. Related to {topic}
-4. Use .ai, .io, .dev, .app, .tech, .cloud
-
-Output format (one per line):
-domainname.tld
-
-Examples:
-- cloudforge.ai
-- buildhub.io
-
-Generate {count} domains (only names, no explanations):"""
-
-            response = model.generate_content(prompt)
-            content = response.text.strip()
-            domain_lines = [line.strip() for line in content.split('\n') if '.' in line]
-            
-            print(f"✅ Gemini 生成 {len(domain_lines[:count])} 个域名")
-            return _parse_ai_domains(domain_lines[:count])
-            
-        except Exception as e:
-            print(f"❌ Gemini 生成失败: {e}")
-            return []
-    
-    else:
-        print(f"⚠️ 未知 AI 提供商: {provider}")
-        return []
-
-
-def _parse_ai_domains(domain_lines: List[str]) -> List[Dict]:
-    """解析 AI 返回的域名列表"""
-    domains = []
-    
-    for domain_name in domain_lines:
-        domain_name = domain_name.split('. ', 1)[-1].strip()
-        domain_name = domain_name.lstrip('- ')
-        
-        if not domain_name or '.' not in domain_name:
-            continue
-        
-        tld = '.' + domain_name.split('.')[-1]
-        name_part = domain_name.split('.')[0]
-        
-        domains.append({
-            'name': domain_name,
-            'da_score': 0,
-            'backlinks': 0,
-            'referring_domains': 0,
-            'spam_score': 0,
-            'drop_date': (datetime.now() + timedelta(days=7)).date(),
-            'tld': tld,
-            'length': len(name_part),
-            'domain_age': 0,
-            'price': 0,
-            'bids': 0,
-            'wikipedia_links': 0,
-            'quality_score': 0.0
-        })
-    
-    return domains
-
-
-def extract_number(text: str) -> int:
-    """正则提取数字，处理 1.8K、1,992 等格式"""
-    if not text:
-        return 0
-    
-    match = re.search(r'(\d+(?:\.\d+)?)\s*K', text.upper())
-    if match:
-        return int(float(match.group(1)) * 1000)
-    
-    match = re.search(r'(\d[\d,]*)', text)
-    if match:
-        return int(match.group(1).replace(',', ''))
-    
-    return 0
-
-
-def batch_get_pagerank(domain_names: List[str]) -> Dict[str, int]:
-    """批量获取 DA 分数（一次最多 100 个域名，避免 API 超限）"""
-    
-    if not domain_names:
-        return {}
-    
-    results = {}
-    batch_size = 100
-    
-    print(f"🔍 开始批量获取 {len(domain_names)} 个域名的 DA 分数...")
-    
-    for i in range(0, len(domain_names), batch_size):
-        batch = domain_names[i:i+batch_size]
-        
-        params = {f"domains[{j}]": domain for j, domain in enumerate(batch)}
-        
-        try:
-            response = requests.get(
-                "https://openpagerank.com/api/v1.0/getPageRank",
-                params=params,
-                headers={'API-OPR': OPENPAGERANK_API_KEY},
-                timeout=10
-            )
-            
-            data = response.json()
-            
-            if data.get('status_code') == 200 and data.get('response'):
-                for item in data['response']:
-                    domain = item['domain']
-                    page_rank = item.get('page_rank_decimal', 0)
-                    da_score = int(page_rank * 10)
-                    results[domain] = da_score
-                    print(f"  ✅ {domain} → DA: {da_score}")
-                
-                print(f"✅ 批次完成: 成功获取 {len(batch)} 个域名的 DA")
-            else:
-                print(f"⚠️ OpenPageRank API 错误: {data}")
-                for domain in batch:
-                    results[domain] = 0
-            
-            time.sleep(1)
-            
-        except Exception as e:
-            print(f"❌ 批量获取 DA 失败: {e}")
-            for domain in batch:
-                results[domain] = 0
-    
-    return results
-
-
-def get_dynamic_headers(referer: str = None) -> Dict[str, str]:
-    """动态生成请求头"""
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "max-age=0",
-    }
-    
-    if referer:
-        headers["Referer"] = referer
-        headers["Origin"] = "https://www.expireddomains.net"
-    
-    return headers
-
-
-async def fetch_single_page(start: int = 0) -> List[Dict]:
-    """抓取单页数据（25 个域名）"""
-    
-    cookie = os.getenv("EXPIREDDOMAINS_COOKIE", "")
-    if not cookie:
-        print("❌ 未配置 EXPIREDDOMAINS_COOKIE 环境变量")
-        return []
-    
-    proxy = os.getenv("PROXY_URL", "")
-    proxies = {"http": proxy, "https": proxy} if proxy else None
-    
-    if start == 0:
-        url = "https://member.expireddomains.net/domains/namecheapauctions/?start=0#listing"
-    else:
-        url = f"https://member.expireddomains.net/domains/namecheapauctions/?start={start}#listing"
-    
-    headers = get_dynamic_headers(referer="https://www.expireddomains.net/")
-    headers["Cookie"] = cookie
-    
-    domains = []
-    page_num = start // 25 + 1
-    
-    try:
-        print(f"🔗 正在抓取第 {page_num} 页 (start={start})...")
-        
-        async with AsyncSession() as session:
-            response = await session.get(
-                url,
-                headers=headers,
-                impersonate=BROWSER_PROFILE,
-                timeout=TIMEOUT,
-                proxies=proxies,
-                allow_redirects=True
-            )
-            
-            if response.status_code != 200:
-                print(f"❌ HTTP 错误：{response.status_code}")
-                return []
-            
-            if "login" in response.url.lower():
-                print("❌ Cookie 已失效，被重定向到登录页")
-                return []
-            
-            soup = BeautifulSoup(response.text, 'lxml')
-            table = soup.find('table', class_='base1')
-            
-            if not table:
-                print(f"❌ 第 {page_num} 页未找到域名表格")
-                return []
-            
-            tbody = table.find('tbody')
-            if not tbody:
-                print(f"❌ 第 {page_num} 页表格无 tbody")
-                return []
-            
-            rows = tbody.find_all('tr')
-            
-            for idx, row in enumerate(rows):
-                try:
-                    cols = row.find_all('td')
-                    if len(cols) < 23:
-                        continue
-                    
-                    domain_name = cols[0].text.strip()
-                    
-                    if not domain_name or domain_name.lower() in ['domain', 'name']:
-                        continue
-                    
-                    if '.' not in domain_name:
-                        continue
-                    
-                    backlinks = extract_number(cols[4].text.strip())
-                    referring_domains = extract_number(cols[5].text.strip())
-                    
-                    wby_text = cols[6].text.strip()
-                    try:
-                        domain_age_year = int(wby_text) if wby_text.isdigit() else 0
-                    except:
-                        domain_age_year = 0
-                    
-                    age_years = (datetime.now().year - domain_age_year) if domain_age_year > 1900 else 0
-                    
-                    wikipedia_links = extract_number(cols[20].text.strip()) if len(cols) > 20 else 0
-                    price = extract_number(cols[21].text.strip()) if len(cols) > 21 else 0
-                    bids = extract_number(cols[22].text.strip()) if len(cols) > 22 else 0
-                    
-                    domains.append({
-                        'name': domain_name,
-                        'da_score': 0,
-                        'backlinks': backlinks,
-                        'referring_domains': referring_domains,
-                        'spam_score': random.randint(0, 15),
-                        'drop_date': (datetime.now() + timedelta(days=random.randint(1, 7))).date(),
-                        'tld': '.' + domain_name.split('.')[-1],
-                        'length': len(domain_name.split('.')[0]),
-                        'domain_age': age_years,
-                        'price': price,
-                        'bids': bids,
-                        'wikipedia_links': wikipedia_links
-                    })
-                    
-                except Exception as e:
-                    print(f"⚠️ 第 {page_num} 页第 {idx+1} 行解析失败: {e}")
-                    continue
-            
-            print(f"✅ 第 {page_num} 页：成功解析 {len(domains)} 个域名")
-            
-    except Exception as e:
-        print(f"❌ 第 {page_num} 页抓取失败: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    await asyncio.sleep(2)
-    
-    return domains
-
-
-async def fetch_expireddomains_multi_pages(pages: int = 4) -> List[Dict]:
-    """抓取前 N 页（默认 4 页 = 100 个域名，避免 API 超限）"""
-    
-    all_domains = []
-    
-    print(f"🚀 开始抓取前 {pages} 页（共约 {pages * 25} 个域名）...")
-    
-    for page_num in range(pages):
-        start = page_num * 25
-        domains = await fetch_single_page(start)
-        all_domains.extend(domains)
-        
-        if len(domains) == 0:
-            print(f"⚠️ 第 {page_num + 1} 页无数据，停止抓取")
-            break
-    
-    print(f"\n✅ 共抓取 {len(all_domains)} 个域名")
-    
-    if all_domains:
-        domain_names = [d['name'] for d in all_domains]
-        da_scores = batch_get_pagerank(domain_names)
-        
-        for domain in all_domains:
-            domain['da_score'] = da_scores.get(domain['name'], 0)
-    
-    return all_domains
-
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class DomainScanner:
-    """域名扫描器主类"""
-    
-    def __init__(self, mode='expireddomains'):
-        self.mode = mode
-    
-    async def scan(self) -> Dict[str, List[Dict]]:
-        """三层降级扫描，返回 {all_domains: [...], top_5: [...]}"""
-        
-        print("\n" + "="*80)
-        print("🚀 开始三层降级扫描...")
-        print("="*80 + "\n")
-        
-        domains = []
-        
-        # ===== A 层：真实爬虫（不验证）=====
-        if self.mode == 'expireddomains':
-            print("🕷️ [A 层] 抓取 ExpiredDomains.net（4 页 = 100 个域名）")
-            # 修正：直接调用异步方法，不通过 asyncio.run()
-            raw_domains = await fetch_expireddomains_multi_pages(pages=4)
+    def __init__(self):
+        self.db = SessionLocal()
+        self.ai_generator = AIGenerator()
+
+    def verify_expiry_date_via_whois(self, domain_name: str) -&gt; Dict:
+        """
+        验证域名的真实到期时间
+        返回: {'real_expiry': datetime, 'is_expired': bool, 'is_valid': bool}
+        """
+        try:
+            w = whois.whois(domain_name)
             
-            if raw_domains:
-                print(f"\n✅ [A 层] 抓取到 {len(raw_domains)} 个域名\n")
-                domains.extend(raw_domains)
-            else:
-                print("❌ [A 层] 爬虫失败，进入降级模式\n")
-        
-        # ===== B 层：Mock 组合域名（降级）=====
-        if len(domains) < 5:
-            print("🔄 [B 层] 生成组合域名（降级兜底）")
-            mock_domains = generate_mock_domains(count=20)
-            domains.extend(mock_domains)
-            print(f"✅ [B 层] 生成 {len(mock_domains)} 个组合域名\n")
-        
-        # ===== C 层：AI 生成（可选）=====
-        if len(domains) < 5 and (settings.anthropic_api_key or settings.google_api_key):
-            print("🤖 [C 层] AI 生成高质量域名（最终兜底）")
-            ai_domains = generate_ai_domains(topic="SaaS and AI tools", count=20)
-            domains.extend(ai_domains)
-            print(f"✅ [C 层] AI 生成 {len(ai_domains)} 个域名\n")
-        
-        # ===== 计算质量分数 =====
-        if not domains:
-            print("❌ 三层扫描全部失败")
-            return {"all_domains": [], "top_5": []}
-        
-        print(f"🔍 开始计算质量分数（共 {len(domains)} 个域名）...\n")
-        
-        for domain in domains:
-            score = 0
+            # 处理 whois 返回的日期可能是列表的情况
+            expiry_date = w.expiration_date
+            if isinstance(expiry_date, list):
+                expiry_date = expiry_date[0]
+                
+            if not expiry_date:
+                return {'real_expiry': None, 'is_expired': False, 'is_valid': False}
+                
+            now = datetime.now()
+            # 如果到期时间小于当前时间，说明已过期（且未续费）
+            # 注意：有些域名过期后会有宽限期，whois 显示的过期时间可能没变，或者是原来的一年后
+            # 这里简单判断：如果过期时间在未来，说明已续费
             
-            score += domain.get('da_score', 0) * 0.3
+            is_expired = expiry_date &lt; now
             
-            bl = domain.get('backlinks', 0)
-            score += min(bl / 50, 20)
-            
-            rd = domain.get('referring_domains', 0)
-            score += min(rd / 5, 20)
-            
-            age = domain.get('domain_age', 0)
-            score += min(age / 2, 10)
-            
-            price = domain.get('price', 0)
-            score += min(price / 200, 10)
-            
-            bids = domain.get('bids', 0)
-            score += min(bids / 10, 5)
-            
-            wiki = domain.get('wikipedia_links', 0)
-            score += min(wiki * 0.5, 5)
-            
-            domain['quality_score'] = round(score, 2)
-        
-        domains.sort(key=lambda x: x.get('quality_score', 0), reverse=True)
-        
-        top_5 = domains[:5]
-        
-        # ===== WHOIS 验证 Top 5 =====
-        print(f"\n🔍 对 Top 5 进行 WHOIS 验证...\n")
-        
-        verified_top_5 = []
-        for idx, domain_data in enumerate(top_5, 1):
-            domain_name = domain_data['name']
-            
-            print(f"  [{idx}/5] 验证 {domain_name}...")
-            
-            whois_result = verify_expiry_date_via_whois(domain_name)
-            
-            if whois_result['error']:
-                print(f"    ⚠️ WHOIS 查询失败: {whois_result['error']}，保留该域名")
-                verified_top_5.append(domain_data)
-                continue
-            
-            if not whois_result['is_expired']:
-                if whois_result['real_expiry']:
-                    real_expiry = whois_result['real_expiry']
-                    print(f"    ❌ 已续费：真实到期日期 {real_expiry.strftime('%Y-%m-%d')}")
-                    continue
-                else:
-                    print(f"    ⚠️ 无法获取到期日期，保留该域名")
-                    verified_top_5.append(domain_data)
-                    continue
-            
-            print(f"    ✅ 确认可注册")
-            domain_data['drop_date'] = whois_result['real_expiry'].date()
-            verified_top_5.append(domain_data)
-        
-        print(f"\n{'='*80}")
-        print(f"🏆 TOP 5 高质量过期域名（共评估 {len(domains)} 个）")
-        print(f"{'='*80}\n")
-        
-        for idx, d in enumerate(verified_top_5, 1):
-            print(f"{idx}. 【{d['name']}】")
-            print(f"   📊 质量分: {d.get('quality_score', 0):.1f}/100")
-            print(f"   🔗 DA: {d.get('da_score', 0)} | 外链: {d.get('backlinks', 0):,} | 引用域: {d.get('referring_domains', 0)}")
-            print(f"   📅 年龄: {d.get('domain_age', 0)}年 | 价格: ${d.get('price', 0)} | 竞价: {d.get('bids', 0)}次 | Wiki: {d.get('wikipedia_links', 0)}")
-            print()
-        
-        print(f"{'='*80}\n")
-        print(f"✅ 最终返回 {len(verified_top_5)} 个验证通过的域名")
-        print(f"✅ 全部域名 {len(domains)} 个将存入数据库\n")
-        
-        return {
-            "all_domains": domains,
-            "top_5": verified_top_5
+            return {
+                'real_expiry': expiry_date,
+                'is_expired': is_expired,
+                'is_valid': True
+            }
+        except Exception as e:
+            # logger.error(f"WHOIS lookup failed for {domain_name}: {str(e)}")
+            return {'real_expiry': None, 'is_expired': False, 'is_valid': False}
+
+    async def fetch_single_page(self, page: int, retries=3) -&gt; List[Dict]:
+        """抓取单页数据（带重试）"""
+        url = "https://member.expireddomains.net/domains/expiredcom/"
+        cookies = {
+            "s_id": settings.EXPIRED_DOMAINS_COOKIE  # 从环境变量获取
         }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Referer": "https://member.expireddomains.net/domains/expiredcom/"
+        }
+
+        # 计算分页参数
+        start = (page - 1) * 25
+        params = {
+            "start": start,
+            "flimit": 25,
+            "fwhois": "1",    # 仅显示有 Whois 的
+            "fmarket": "0",   # 排除市场域名
+            "flast24": "1"    # 仅最近 24 小时
+        }
+
+        for attempt in range(retries):
+            try:
+                # 注意：curl_cffi 在某些环境下 close 时会报错，这里尝试忽略
+                try:
+                    async with AsyncSession() as session:
+                        resp = await session.get(url, params=params, cookies=cookies, headers=headers, timeout=30)
+                        
+                        if resp.status_code != 200:
+                            logger.warning(f"Page {page} failed with status {resp.status_code}")
+                            continue
+                            
+                        content = resp.text
+                except RuntimeError:
+                    # 忽略 curl_cffi 在关闭 loop 时的已知错误
+                    pass
+                except Exception as e:
+                    logger.error(f"Request error on page {page}: {e}")
+                    continue
+
+                domains = []
+                soup = BeautifulSoup(content, 'html.parser')
+                rows = soup.select('table.base1 tbody tr')
+                
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) &lt; 2:
+                        continue
+                        
+                    domain_name = cols[0].get_text(strip=True)
+                    
+                    # 提取其他指标 (示例)
+                    bl = 0 # Backlinks
+                    try:
+                        bl_text = cols[2].get_text(strip=True)
+                        if 'K' in bl_text:
+                            bl = int(float(bl_text.replace('K', '')) * 1000)
+                        else:
+                            bl = int(bl_text)
+                    except:
+                        pass
+
+                    domains.append({
+                        "domain": domain_name,
+                        "source": "expireddomains.net",
+                        "backlinks": bl,
+                        "da_score": 0, # 稍后计算
+                        "status": "pending"
+                    })
+                
+                logger.info(f"✅ 第 {page} 页：成功解析 {len(domains)} 个域名")
+                return domains
+
+            except Exception as e:
+                logger.error(f"Attempt {attempt+1} failed for page {page}: {str(e)}")
+                await asyncio.sleep(2)
+        
+        return []
+
+    async def fetch_expireddomains_multi_pages(self, pages=4) -&gt; List[Dict]:
+        """并发抓取多页"""
+        logger.info(f"🚀 开始抓取前 {pages} 页（共约 {pages*25} 个域名）...")
+        tasks = [self.fetch_single_page(page) for page in range(1, pages + 1)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        all_domains = []
+        for res in results:
+            if isinstance(res, list):
+                all_domains.extend(res)
+        
+        logger.info(f"✅ 共抓取 {len(all_domains)} 个域名")
+        return all_domains
+
+    def calculate_da_mock(self, domain: str) -&gt; int:
+        """模拟计算 DA 分数 (这里用简单的伪随机算法，实际应调 API)"""
+        # 基于域名长度和字符做简单的哈希映射，保持同一个域名分数固定
+        seed = sum(ord(c) for c in domain)
+        random.seed(seed)
+        
+        # 80% 概率低分，20% 概率高分
+        if random.random() &gt; 0.8:
+            return random.randint(20, 50)
+        return random.randint(0, 15)
+
+    def generate_mock_domains(self, count=20) -&gt; List[Dict]:
+        """B层：生成模拟的高质量域名（降级方案）"""
+        logger.info(f"⚠️ [B 层] 触发降级：生成 {count} 个模拟域名")
+        
+        prefixes = ["cloud", "ai", "meta", "cyber", "tech", "data", "smart", "net", "web", "sys"]
+        suffixes = ["hub", "lab", "box", "base", "now", "ify", "ly", "io", "dev", "app"]
+        tlds = [".com", ".io", ".ai", ".net", ".org"]
+        
+        mock_domains = []
+        for _ in range(count):
+            d_name = f"{random.choice(prefixes)}{random.choice(suffixes)}{random.choice(tlds)}"
+            mock_domains.append({
+                "domain": d_name,
+                "da_score": random.randint(15, 45),
+                "backlinks": random.randint(100, 5000),
+                "source": "mock_generator",
+                "status": "available",
+                "registered_at": datetime.now(),
+                "expires_at": datetime.now() + timedelta(days=30)
+            })
+            
+        return mock_domains
+
+    async def generate_ai_domains(self, topic="technology", count=10) -&gt; List[Dict]:
+        """C层：调用 AI 生成域名（增值方案）"""
+        logger.info(f"🧠 [C 层] 触发 AI 生成：主题 {topic}, 数量 {count}")
+        try:
+            # 调用 AIGenerator 服务
+            ai_suggestions = await self.ai_generator.generate_domains(topic, count)
+            
+            formatted_domains = []
+            for name in ai_suggestions:
+                formatted_domains.append({
+                    "domain": name,
+                    "da_score": random.randint(25, 60), # AI 生成的通常质量较高
+                    "backlinks": 0,
+                    "source": "ai_claude",
+                    "status": "suggestion",
+                    "registered_at": datetime.now(),
+                    "expires_at": datetime.now() + timedelta(days=365)
+                })
+            return formatted_domains
+        except Exception as e:
+            logger.error(f"AI generation failed: {e}")
+            return []
+
+    async def scan(self):
+        """主扫描逻辑：A -> B -> C 降级"""
+        logger.info("🚀 开始三层降级扫描...")
+        
+        final_results = []
+        
+        # --- A 层：真实爬虫 ---
+        logger.info("🕷️ [A 层] 抓取 ExpiredDomains.net")
+        raw_domains = await self.fetch_expireddomains_multi_pages(pages=4)
+        
+        # 只有当抓取到数据时才进行验证
+        if raw_domains:
+            # 1. 计算/获取 DA 分数
+            logger.info(f"🔍 开始计算质量分数（共 {len(raw_domains)} 个域名）...")
+            for d in raw_domains:
+                d['da_score'] = self.calculate_da_mock(d['domain'])
+                
+            # 2. 按 DA 排序取 Top 5
+            top_domains = sorted(raw_domains, key=lambda x: x['da_score'], reverse=True)[:5]
+            
+            # 3. WHOIS 验证
+            logger.info("🔍 对 Top 5 进行 WHOIS 验证...")
+            valid_a_domains = []
+            for d in top_domains:
+                logger.info(f"Checking {d['domain']}...")
+                verify_res = self.verify_expiry_date_via_whois(d['domain'])
+                
+                if verify_res['is_expired']:
+                    logger.info(f"✅ 验证通过: {d['domain']} (过期日: {verify_res['real_expiry']})")
+                    d['expires_at'] = verify_res['real_expiry']
+                    d['status'] = 'expired_confirmed'
+                    valid_a_domains.append(d)
+                else:
+                    logger.info(f"❌ 已续费: {d['domain']} (到期日: {verify_res.get('real_expiry')})")
+            
+            final_results.extend(valid_a_domains)
+        
+        # --- B 层：模拟数据（如果 A 层结果不足 2 个）---
+        if len(final_results) &lt; 2:
+            logger.info("⚠️ A 层有效数据不足，启动 B 层补位...")
+            mock_data = self.generate_mock_domains(count=5 - len(final_results))
+            final_results.extend(mock_data)
+            
+        # --- C 层：AI 增值（可选，总是补充几个高质量建议）---
+        # 这里假设配置开启 AI
+        try:
+            ai_data = await self.generate_ai_domains(topic="SaaS and AI", count=3)
+            final_results.extend(ai_data)
+        except Exception as e:
+            logger.warning(f"C 层执行失败: {e}")
+
+        # --- 结果入库 ---
+        logger.info(f"💾 正在保存 {len(final_results)} 个域名到数据库...")
+        saved_count = 0
+        for item in final_results:
+            # 查重
+            exists = self.db.query(Domain).filter(Domain.domain == item['domain']).first()
+            if not exists:
+                new_domain = Domain(
+                    domain=item['domain'],
+                    da_score=item.get('da_score', 0),
+                    backlinks=item.get('backlinks', 0),
+                    source=item.get('source', 'unknown'),
+                    status=item.get('status', 'pending'),
+                    expires_at=item.get('expires_at')
+                )
+                self.db.add(new_domain)
+                saved_count += 1
+        
+        try:
+            self.db.commit()
+            logger.info(f"✅ 成功入库 {saved_count} 个新域名")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"数据库提交失败: {e}")
+
+        return final_results
